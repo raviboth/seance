@@ -35,66 +35,44 @@ if [[ "${SEANCE_CODEX_HOOKS_DISABLED:-}" == "1" ]]; then
     exec "$REAL_CODEX" "$@"
 fi
 
+# ── Pass-through subcommands ─────────────────────────────────────────────────
+
+case "${1:-}" in
+    mcp|login|logout|debug|sandbox|completion|mcp-server|app-server|features|apply|a|agents|plugin|remote-control|update|doctor|queue|archive|delete|migrate-rollouts|unarchive|cloud|exec-server|help|-h|--help|-V|--version)
+        exec "$REAL_CODEX" "$@"
+        ;;
+esac
+
 # Socket health check (0.75s timeout)
 if ! timeout 0.75 seance ctl --socket "${SEANCE_SOCKET_PATH:-}" ping >/dev/null 2>&1; then
     exec "$REAL_CODEX" "$@"
 fi
 
-# ── Pass-through subcommands ─────────────────────────────────────────────────
+# ── Add hooks in the session config layer ──────────────────────────────────
+# Keep the real CODEX_HOME: auth, history, plugins, and hook trust must persist.
+# Codex merges these hooks with user/project hooks. Session-flag hook identities
+# are stable across panes, so reviewing them once is enough. Keep pane IDs in
+# the environment, never in the commands (which would invalidate their trust).
 
-case "${1:-}" in
-    mcp|login|logout|debug|sandbox|completion|mcp-server|app-server|features|apply)
-        exec "$REAL_CODEX" "$@"
-        ;;
-esac
-
-# ── Create per-session isolated config dir ──────────────────────────────────
-# CODEX_HOME env var redirects both config.toml and hooks.json discovery.
-# We symlink the user's real config and write our own hooks.json, avoiding
-# any mutation of ~/.codex/hooks.json (no Python, no race conditions, no
-# cleanup traps).
-
-SESSION_DIR="$HOME/.cache/seance-codex/$SEANCE_SURFACE_ID"
-rm -rf "$SESSION_DIR"
-mkdir -p "$SESSION_DIR"
-
-REAL_HOME="${CODEX_HOME:-$HOME/.codex}"
-
-# Symlink everything from real config dir except hooks.json
-if [[ -d "$REAL_HOME" ]]; then
-    for item in "$REAL_HOME"/*; do
-        [[ "$(basename "$item")" == "hooks.json" ]] && continue
-        ln -sf "$item" "$SESSION_DIR/"
-    done
-fi
-
-# Write seance hooks (replaces any user hooks — merging is not supported)
-cat > "$SESSION_DIR/hooks.json" <<'HOOKEOF'
-{
-  "hooks": {
-    "SessionStart": [{"hooks": [{"type": "command", "command": "seance ctl codex-hook session-start", "timeout": 10}]}],
-    "SessionEnd": [{"hooks": [{"type": "command", "command": "seance ctl codex-hook session-end", "timeout": 10}]}],
-    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "seance ctl codex-hook prompt-submit", "timeout": 10}]}],
-    "PreToolUse": [{"hooks": [{"type": "command", "command": "seance ctl codex-hook pre-tool-use", "timeout": 10}]}],
-    "PostToolUse": [{"hooks": [{"type": "command", "command": "seance ctl codex-hook post-tool-use", "timeout": 10}]}],
-    "Stop": [{"hooks": [{"type": "command", "command": "seance ctl codex-hook stop", "timeout": 10}]}]
-  }
-}
+HOOK_ARGS=(--enable hooks)
+while read -r event command; do
+    HOOK_ARGS+=(-c "hooks.$event=[{hooks=[{type=\"command\",command=\"seance ctl codex-hook $command\",timeout=3}]}]")
+done <<'HOOKEOF'
+SessionStart session-start
+SessionEnd session-end
+UserPromptSubmit prompt-submit
+PreToolUse pre-tool-use
+PostToolUse post-tool-use
+Stop stop
 HOOKEOF
 
-# Export session dir so seance can clean it up on pane exit
-export SEANCE_CODEX_SESSION_DIR="$SESSION_DIR"
 export SEANCE_CODEX_PID=$$
 
 # ── Launch codex (no exec — wrapper must survive for cleanup) ───────────────
+# Codex may not fire SessionEnd, including on startup failure. The EXIT trap
+# also runs on nonzero exits under set -e; cleanup must not mask Codex's status.
+trap 'timeout 3 seance ctl codex-hook session-end <<< "{}" >/dev/null 2>&1 || true' EXIT
 
-CODEX_HOME="$SESSION_DIR" "$REAL_CODEX" --enable codex_hooks "$@"
-rc=$?
-
-# ── Session-end cleanup ─────────────────────────────────────────────────────
-# Codex may not fire SessionEnd, so we always run it from the wrapper.
-
-seance ctl codex-hook session-end <<< "{}" 2>/dev/null || true
-rm -rf "$SESSION_DIR"
-
+rc=0
+"$REAL_CODEX" "${HOOK_ARGS[@]}" "$@" || rc=$?
 exit $rc

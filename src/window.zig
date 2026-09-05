@@ -392,14 +392,10 @@ pub const WindowState = struct {
         // Purge notifications for the closing pane
         _ = self.notif_center.store.removeForPane(pane_id);
 
-        // Clean up agent session dirs (deterministic path based on surface id).
+        // Clean up Pi session dirs (deterministic path based on surface id).
         // This handles SIGKILL/OOM where the SessionEnd hook never fires.
         if (std.posix.getenv("HOME")) |home| {
             var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-            const codex_path = std.fmt.bufPrint(&path_buf, "{s}/.cache/seance-codex/{d}", .{ home, pane_id }) catch "";
-            if (codex_path.len > 0) {
-                std.fs.deleteTreeAbsolute(codex_path) catch {};
-            }
             const pi_path = std.fmt.bufPrint(&path_buf, "{s}/.cache/seance-pi/{d}", .{ home, pane_id }) catch "";
             if (pi_path.len > 0) {
                 std.fs.deleteTreeAbsolute(pi_path) catch {};

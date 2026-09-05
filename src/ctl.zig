@@ -1201,13 +1201,13 @@ const codex_agent = AgentConfig{
     .display_name = "Codex CLI",
     .usage = "usage: codex-hook <session-start|session-end|prompt-submit|pre-tool-use|post-tool-use|stop>\n",
     .pid_env = "SEANCE_CODEX_PID",
-    .response = "{\"continue\":true}\n",
+    .response = "{}\n",
     .status_key_prefix = "codex",
     .status_key_mode = .surface,
     .has_ask_user_handling = false,
     .has_notification_hook = false,
     .has_post_tool_hook = true,
-    .session_dir_env = "SEANCE_CODEX_SESSION_DIR",
+    .session_dir_env = null,
 };
 
 const pi_agent = AgentConfig{

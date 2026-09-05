@@ -19,6 +19,11 @@ zig build
 
 You need Zig 0.15.2+, GTK4, libadwaita, OpenGL 4.3+, and Linux. The submodule (`ghostty`) must be checked out for libghostty to build.
 
+Run the Codex wrapper regression tests with `python3 -m unittest discover -s tests -v`.
+Set `SEANCE_TEST_CODEX` to the real Codex binary (outside Séance's wrapper directory)
+to also check hook loading and approval persistence using its local app-server.
+This check uses a temporary Codex home and makes no model calls.
+
 ## Code style
 
 - Match existing style. Zig source uses the standard formatter (`zig fmt`).

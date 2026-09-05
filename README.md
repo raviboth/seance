@@ -24,7 +24,7 @@
 
 ## Why Séance?
 
-Séance is a GTK4 terminal multiplexer for Linux. It auto-detects [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), and [Pi](https://github.com/badlogic/pi-mono) sessions running inside it and tracks their status (working, waiting for permission, idle) live in the sidebar. Permission requests and task completions are surfaced as desktop notifications with unread tracking. Zero configuration, no dotfile edits: open an agent in a pane and it is tracked.
+Séance is a GTK4 terminal multiplexer for Linux. It auto-detects [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), and [Pi](https://github.com/badlogic/pi-mono) sessions running inside it and tracks their status (working, waiting for permission, idle) live in the sidebar. Permission requests and task completions are surfaced as desktop notifications with unread tracking. No manual dotfile edits: open an agent in a pane to track it.
 
 ### Linux-native, not Electron
 
@@ -37,6 +37,11 @@ Panes are arranged in a horizontal strip that you scroll through, borrowing the 
 ### Agent-agnostic
 
 Claude Code, Codex, and Pi are auto-tracked out of the box. Adding support for another agent is a hook config PR rather than a rewrite. Agents that do not speak hooks still get all the plain multiplexer features.
+
+Codex requires a one-time review of Séance's hooks via `/hooks`. Approval persists
+across panes and restarts; changes to the hook definitions require a new review.
+Séance adds its hooks for the current invocation and keeps your Codex home,
+existing hooks, authentication, and history in place.
 
 ### Scriptable
 
