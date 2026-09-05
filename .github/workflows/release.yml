@@ -48,6 +48,7 @@ jobs:
             --exclude='./*.AppImage' \
             --exclude='./zig-out' \
             --exclude='./.zig-cache' \
+            --exclude='zig-pkg' \
             --exclude='./linuxdeploy*' \
             --exclude='./demo.gif' \
             ./
@@ -57,7 +58,7 @@ jobs:
       - name: Install Zig
         uses: mlugg/setup-zig@v2
         with:
-          version: 0.15.2
+          version: 0.16.0
 
       - name: Install system dependencies
         run: |

@@ -1,4 +1,5 @@
 const std = @import("std");
+const io = @import("io.zig");
 
 /// Read the current git branch from a working directory by walking up
 /// to find .git/HEAD. Returns the branch name, short SHA for detached HEAD,
@@ -11,7 +12,7 @@ pub fn getBranch(buf: []u8, cwd: []const u8) ?[]const u8 {
         const head_path = std.fmt.bufPrint(&path_buf, "{s}/.git/HEAD", .{dir}) catch return null;
 
         if (readFileContent(head_path, buf)) |content| {
-            const trimmed = std.mem.trimRight(u8, content, "\n\r ");
+            const trimmed = std.mem.trimEnd(u8, content, "\n\r ");
             const prefix = "ref: refs/heads/";
             if (std.mem.startsWith(u8, trimmed, prefix)) {
                 const branch = trimmed[prefix.len..];
@@ -34,23 +35,23 @@ pub fn getBranch(buf: []u8, cwd: []const u8) ?[]const u8 {
 /// Uses `git diff-index --quiet HEAD --` which is a fast plumbing command.
 /// Returns true if dirty, false if clean or on any error.
 pub fn isDirty(alloc: std.mem.Allocator, cwd: []const u8) bool {
-    const result = std.process.Child.run(.{
-        .allocator = alloc,
+    const result = std.process.run(alloc, io.get(), .{
         .argv = &[_][]const u8{ "git", "-C", cwd, "diff-index", "--quiet", "HEAD", "--" },
-        .max_output_bytes = 1,
+        .stdout_limit = .limited(1),
+        .stderr_limit = .limited(1),
     }) catch return false;
     alloc.free(result.stdout);
     alloc.free(result.stderr);
     return switch (result.term) {
-        .Exited => |code| code != 0,
+        .exited => |code| code != 0,
         else => false,
     };
 }
 
 fn readFileContent(path: []const u8, buf: []u8) ?[]const u8 {
-    const file = std.fs.openFileAbsolute(path, .{}) catch return null;
-    defer file.close();
-    const n = file.read(buf) catch return null;
+    const file = std.Io.Dir.openFileAbsolute(io.get(), path, .{}) catch return null;
+    defer file.close(io.get());
+    const n = file.readStreaming(io.get(), &.{buf}) catch return null;
     if (n == 0) return null;
     return buf[0..n];
 }

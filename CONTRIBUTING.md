@@ -17,7 +17,16 @@ zig build
 ./zig-out/bin/seance
 ```
 
-You need Zig 0.15.2+, GTK4, libadwaita, OpenGL 4.3+, and Linux. The submodule (`ghostty`) must be checked out for libghostty to build.
+You need Zig 0.16.x, GTK4, libadwaita, OpenGL 4.3+, and Linux. The submodule (`ghostty`) must be checked out for libghostty to build.
+
+The fork's [patch ledger](ghostty/SEANCE_PATCHES.md) documents the embedding
+changes that must survive upstream updates. Run `zig build test` and
+`xvfb-run zig build e2e`, then exercise scrollback restore, clipboard, and pane
+reparenting with:
+
+```bash
+SEANCE_TEST_BINARY="$PWD/zig-out/bin/seance" xvfb-run python3 -m unittest discover -s tests -p 'test_ghostty_integration.py' -v
+```
 
 Run the Codex wrapper regression tests with `python3 -m unittest discover -s tests -v`.
 Set `SEANCE_TEST_CODEX` to the real Codex binary (outside Séance's wrapper directory)

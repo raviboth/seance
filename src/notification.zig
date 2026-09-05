@@ -1,4 +1,5 @@
 const std = @import("std");
+const io = @import("io.zig");
 
 pub const Notification = struct {
     pane_id: u64,
@@ -261,7 +262,7 @@ pub const NotificationCenter = struct {
             .pane_id = opts.pane_id,
             .workspace_id = opts.workspace_id,
             .pane_group_id = opts.pane_group_id,
-            .timestamp = std.time.timestamp(),
+            .timestamp = io.timestamp(),
             .read = false,
         };
         notif.setTitle(opts.title);
@@ -622,4 +623,3 @@ test "NotificationStore: clearAll" {
     try testing.expectEqual(@as(usize, 0), store.count);
     try testing.expect(store.getByIndex(0) == null);
 }
-

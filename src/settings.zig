@@ -1,4 +1,5 @@
 const std = @import("std");
+const io = @import("io.zig");
 const c = @import("c.zig").c;
 const config_mod = @import("config.zig");
 const ghostty_bridge = @import("ghostty_bridge.zig");
@@ -65,7 +66,6 @@ const Widgets = struct {
     // Scale
     background_opacity: ?*c.GtkWidget = null,
     background_opacity_label: ?*c.GtkWidget = null,
-
 };
 
 // ---------------------------------------------------------------------------
@@ -301,7 +301,7 @@ fn populateThemeModel(cfg: *const config_mod.Config) ThemeModelResult {
     }
 
     // 3. User themes (~/.config/ghostty/themes/)
-    if (std.posix.getenv("HOME")) |home| {
+    if (io.getenv("HOME")) |home| {
         var buf: [std.fs.max_path_bytes]u8 = undefined;
         if (std.fmt.bufPrint(&buf, "{s}/.config/ghostty/themes", .{home})) |path| {
             collectThemesFromDir(path, &names, &seen);
@@ -338,10 +338,10 @@ fn collectThemesFromDir(
     seen: *std.StringHashMap(void),
 ) void {
     const path = dir_path orelse return;
-    var dir = std.fs.openDirAbsolute(path, .{ .iterate = true }) catch return;
-    defer dir.close();
+    var dir = std.Io.Dir.openDirAbsolute(io.get(), path, .{ .iterate = true }) catch return;
+    defer dir.close(io.get());
     var it = dir.iterate();
-    while (it.next() catch null) |entry| {
+    while (it.next(io.get()) catch null) |entry| {
         if (entry.kind == .directory) continue;
         if (entry.name.len == 0 or entry.name[0] == '.') continue;
         if (seen.contains(entry.name)) continue;

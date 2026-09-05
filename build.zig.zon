@@ -2,17 +2,22 @@
     .name = .seance,
     .version = "0.1.4",
     .fingerprint = 0xdf7dfd0efeec22c7,
-    .minimum_zig_version = "0.15.2",
+    .minimum_zig_version = "0.16.0",
     .paths = .{
         "build.zig",
         "build.zig.zon",
         "src",
     },
     .dependencies = .{
+        // Match Ghostty's translator fixes for Zig 0.16 and GTK headers.
+        .translate_c = .{
+            .url = "https://deps.files.ghostty.org/translate_c-80f8b6e4f45a303268717d8e5f4f91d7837138bb.tar.gz",
+            .hash = "translate_c-0.0.0-Q_BUWmU6BwB_9JKG2l2W7i_mhmYWeRseTGBEHi_YlV5f",
+        },
         .ghostty = .{ .path = "ghostty" },
         .ghostty_themes = .{
-            .url = "https://deps.files.ghostty.org/ghostty-themes-release-20260216-151611-fc73ce3.tgz",
-            .hash = "N-V-__8AABVbAwBwDRyZONfx553tvMW8_A2OKUoLzPUSRiLF",
+            .url = "https://deps.files.ghostty.org/ghostty-themes-release-20260824-153547-75c93ee.tgz",
+            .hash = "N-V-__8AAGZkBACH0haGC9R-hfNPYWxu16hr-ydEsolad9GV",
             .lazy = true,
         },
     },

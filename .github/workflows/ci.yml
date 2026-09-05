@@ -16,7 +16,7 @@ jobs:
       - name: Install Zig
         uses: mlugg/setup-zig@v2
         with:
-          version: 0.15.2
+          version: 0.16.0
 
       - name: Install system dependencies
         run: |
@@ -45,3 +45,8 @@ jobs:
 
       - name: E2E tests
         run: xvfb-run zig build e2e
+
+      - name: Ghostty embedding tests
+        run: xvfb-run python3 -m unittest discover -s tests -p 'test_ghostty_integration.py' -v
+        env:
+          SEANCE_TEST_BINARY: ${{ github.workspace }}/zig-out/bin/seance

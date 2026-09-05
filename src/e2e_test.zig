@@ -15,18 +15,19 @@
 // cage/Xvfb are fallbacks for headless CI environments.
 
 const std = @import("std");
-const posix = std.posix;
+const io = @import("io.zig");
+const posix = @import("posix.zig");
 const Allocator = std.mem.Allocator;
 
 // ── Main ───────────────────────────────────────────────────────────────
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
+    io.init(init.io);
     // Use page_allocator to avoid leak-check noise on exit — the e2e runner
     // is a short-lived process and all memory is reclaimed by the OS.
     const alloc = std.heap.page_allocator;
 
-    const argv = try std.process.argsAlloc(alloc);
-    defer std.process.argsFree(alloc, argv);
+    const argv = try init.minimal.args.toSlice(alloc);
 
     const seance_bin = if (argv.len > 1) argv[1] else {
         std.debug.print("usage: e2e_test <path-to-seance-binary>\n", .{});
@@ -34,7 +35,7 @@ pub fn main() !void {
     };
 
     // Verify seance binary exists
-    std.fs.accessAbsolute(seance_bin, .{}) catch {
+    std.Io.Dir.accessAbsolute(io.get(), seance_bin, .{}) catch {
         std.debug.print("error: seance binary not found at: {s}\n", .{seance_bin});
         std.process.exit(1);
     };
@@ -108,26 +109,24 @@ fn detectBackend(alloc: Allocator) DisplayBackend {
 /// Returns false on CI / headless machines where DISPLAY is unset or
 /// points at a dead socket.
 fn probeNativeDisplay(alloc: Allocator) bool {
-    if (std.posix.getenv("DISPLAY") == null) return false;
+    if (io.getenv("DISPLAY") == null) return false;
     // Verify the X display is reachable.  `xset q` is lightweight and
     // exits 1 when the display is unreachable.
-    const result = std.process.Child.run(.{
-        .allocator = alloc,
+    const result = std.process.run(alloc, io.get(), .{
         .argv = &.{ "xset", "q" },
     }) catch return false;
     alloc.free(result.stdout);
     alloc.free(result.stderr);
-    return result.term == .Exited and result.term.Exited == 0;
+    return result.term == .exited and result.term.exited == 0;
 }
 
 fn hasCommand(alloc: Allocator, name: []const u8) bool {
-    const result = std.process.Child.run(.{
-        .allocator = alloc,
+    const result = std.process.run(alloc, io.get(), .{
         .argv = &.{ "which", name },
     }) catch return false;
     alloc.free(result.stdout);
     alloc.free(result.stderr);
-    return result.term.Exited == 0;
+    return result.term.exited == 0;
 }
 
 // ── Test runner ────────────────────────────────────────────────────────
@@ -193,7 +192,7 @@ const Harness = struct {
         const tmp_dir = try std.fmt.allocPrint(alloc, "/tmp/seance-e2e-{d}", .{pid});
 
         // Clean up any stale dir from a previous crashed run
-        std.fs.deleteTreeAbsolute(tmp_dir) catch {};
+        std.Io.Dir.cwd().deleteTree(io.get(), tmp_dir) catch {};
 
         const config_dir = try std.fmt.allocPrint(alloc, "{s}/config/seance", .{tmp_dir});
         const home_dir = try std.fmt.allocPrint(alloc, "{s}/home", .{tmp_dir});
@@ -208,10 +207,10 @@ const Harness = struct {
         const socket_path = try std.fmt.allocPrint(alloc, "{s}/seance.sock", .{tmp_dir});
         const config_path = try std.fmt.allocPrint(alloc, "{s}/config.toml", .{config_dir});
         {
-            const f = try std.fs.createFileAbsolute(config_path, .{});
-            defer f.close();
+            const f = try std.Io.Dir.createFileAbsolute(io.get(), config_path, .{});
+            defer f.close(io.get());
             var buf: [512]u8 = undefined;
-            var w = f.writer(&buf);
+            var w = f.writer(io.get(), &buf);
             try w.interface.print("[socket]\npath = \"{s}\"\n\n[behavior]\nconfirm-close-window = false\n", .{socket_path});
             try w.interface.flush();
         }
@@ -240,7 +239,7 @@ const Harness = struct {
                 harness.display_pid = try spawnXvfb(alloc, display);
 
                 // Give Xvfb a moment to initialize
-                std.Thread.sleep(300 * std.time.ns_per_ms);
+                io.sleep(300 * std.time.ns_per_ms);
 
                 harness.seance_pid = try spawnSeanceX11(alloc, seance_bin, display, xdg_config, home_dir, run_dir, cache_dir);
             },
@@ -256,9 +255,9 @@ const Harness = struct {
     pub fn shutdown(self: *Harness) void {
         std.debug.print("\nseance e2e: shutting down...\n", .{});
         if (self.seance_pid) |pid| killProcess(pid);
-        std.Thread.sleep(100 * std.time.ns_per_ms);
+        io.sleep(100 * std.time.ns_per_ms);
         if (self.display_pid) |pid| killProcess(pid);
-        std.fs.deleteTreeAbsolute(self.tmp_dir) catch {};
+        std.Io.Dir.cwd().deleteTree(io.get(), self.tmp_dir) catch {};
     }
 
     fn waitReady(self: *Harness) !void {
@@ -267,7 +266,7 @@ const Harness = struct {
             if (self.callRaw("system.ping", null)) |_| {
                 return;
             } else |_| {}
-            std.Thread.sleep(POLL_INTERVAL_MS * std.time.ns_per_ms);
+            io.sleep(POLL_INTERVAL_MS * std.time.ns_per_ms);
             elapsed += POLL_INTERVAL_MS;
         }
         std.debug.print("error: seance did not respond within {d}ms\n", .{STARTUP_TIMEOUT_MS});
@@ -369,7 +368,7 @@ const Harness = struct {
                     }
                 }
             } else |_| {}
-            std.Thread.sleep(POLL_INTERVAL_MS * std.time.ns_per_ms);
+            io.sleep(POLL_INTERVAL_MS * std.time.ns_per_ms);
             elapsed += POLL_INTERVAL_MS;
         }
         return TestError.Timeout;
@@ -392,25 +391,18 @@ fn spawnSeanceNative(
     const cache_dir_arg = try std.fmt.allocPrint(alloc, "XDG_CACHE_HOME={s}", .{cache_dir});
     const home_dir_arg = try std.fmt.allocPrint(alloc, "HOME={s}", .{home_dir});
 
-    var child = std.process.Child.init(
-        &.{
-            "env",
-            "GDK_BACKEND=x11",
-            xdg_config_arg,
-            run_dir_arg,
-            cache_dir_arg,
-            home_dir_arg,
-            "NO_AT_BRIDGE=1",
-            "DBUS_SESSION_BUS_ADDRESS=disabled:",
-            seance_bin,
-        },
-        alloc,
-    );
-    child.stdin_behavior = .Ignore;
-    child.stdout_behavior = .Ignore;
-    child.stderr_behavior = .Pipe;
-    try child.spawn();
-    return child.id;
+    const child = try std.process.spawn(io.get(), .{ .argv = &.{
+        "env",
+        "GDK_BACKEND=x11",
+        xdg_config_arg,
+        run_dir_arg,
+        cache_dir_arg,
+        home_dir_arg,
+        "NO_AT_BRIDGE=1",
+        "DBUS_SESSION_BUS_ADDRESS=disabled:",
+        seance_bin,
+    }, .stdin = .ignore, .stdout = .ignore, .stderr = .inherit });
+    return child.id.?;
 }
 
 /// Spawn cage (headless Wayland compositor) wrapping seance as its child.
@@ -428,8 +420,8 @@ fn spawnCage(
     const cache_dir_arg = try std.fmt.allocPrint(alloc, "XDG_CACHE_HOME={s}", .{cache_dir});
     const home_dir_arg = try std.fmt.allocPrint(alloc, "HOME={s}", .{home_dir});
 
-    var child = std.process.Child.init(
-        &.{
+    const child = try std.process.spawn(io.get(), .{
+        .argv = &.{
             "env",
             "WLR_BACKENDS=headless",
             xdg_config_arg,
@@ -445,26 +437,17 @@ fn spawnCage(
             "--",
             seance_bin,
         },
-        alloc,
-    );
-    child.stdin_behavior = .Ignore;
-    child.stdout_behavior = .Ignore;
-    child.stderr_behavior = .Pipe; // suppress verbose wlroots/EGL logging
-    try child.spawn();
-    return child.id;
+        .stdin = .ignore,
+        .stdout = .ignore,
+        .stderr = .inherit,
+    });
+    return child.id.?;
 }
 
 /// Spawn Xvfb (X11 virtual framebuffer).
-fn spawnXvfb(alloc: Allocator, display: []const u8) !posix.pid_t {
-    var child = std.process.Child.init(
-        &.{ "Xvfb", display, "-screen", "0", "1280x720x24", "-nolisten", "tcp", "-ac" },
-        alloc,
-    );
-    child.stdin_behavior = .Ignore;
-    child.stdout_behavior = .Ignore;
-    child.stderr_behavior = .Ignore;
-    try child.spawn();
-    return child.id;
+fn spawnXvfb(_: Allocator, display: []const u8) !posix.pid_t {
+    const child = try std.process.spawn(io.get(), .{ .argv = &.{ "Xvfb", display, "-screen", "0", "1280x720x24", "-nolisten", "tcp", "-ac" }, .stdin = .ignore, .stdout = .ignore, .stderr = .inherit });
+    return child.id.?;
 }
 
 /// Spawn seance under Xvfb (X11 + software rendering).
@@ -483,46 +466,39 @@ fn spawnSeanceX11(
     const cache_dir_arg = try std.fmt.allocPrint(alloc, "XDG_CACHE_HOME={s}", .{cache_dir});
     const home_dir_arg = try std.fmt.allocPrint(alloc, "HOME={s}", .{home_dir});
 
-    var child = std.process.Child.init(
-        &.{
-            "env",
-            display_arg,
-            "GDK_BACKEND=x11",
-            "LIBGL_ALWAYS_SOFTWARE=1",
-            xdg_config_arg,
-            run_dir_arg,
-            cache_dir_arg,
-            home_dir_arg,
-            "GDK_DISABLE=gles-api,vulkan",
-            "NO_AT_BRIDGE=1",
-            "DBUS_SESSION_BUS_ADDRESS=disabled:",
-            seance_bin,
-        },
-        alloc,
-    );
-    child.stdin_behavior = .Ignore;
-    child.stdout_behavior = .Ignore;
-    child.stderr_behavior = .Inherit;
-    try child.spawn();
-    return child.id;
+    const child = try std.process.spawn(io.get(), .{ .argv = &.{
+        "env",
+        display_arg,
+        "GDK_BACKEND=x11",
+        "LIBGL_ALWAYS_SOFTWARE=1",
+        xdg_config_arg,
+        run_dir_arg,
+        cache_dir_arg,
+        home_dir_arg,
+        "GDK_DISABLE=gles-api,vulkan",
+        "NO_AT_BRIDGE=1",
+        "DBUS_SESSION_BUS_ADDRESS=disabled:",
+        seance_bin,
+    }, .stdin = .ignore, .stdout = .ignore, .stderr = .inherit });
+    return child.id.?;
 }
 
 fn killProcess(pid: posix.pid_t) void {
     posix.kill(pid, posix.SIG.TERM) catch {};
-    _ = posix.waitpid(pid, 0);
+    posix.waitpid(pid, 0);
 }
 
 fn mkdirRecursive(path: []const u8) !void {
     var i: usize = 1;
     while (i < path.len) : (i += 1) {
         if (path[i] == '/') {
-            std.fs.makeDirAbsolute(path[0..i]) catch |e| switch (e) {
+            std.Io.Dir.createDirAbsolute(io.get(), path[0..i], .default_dir) catch |e| switch (e) {
                 error.PathAlreadyExists => {},
                 else => return e,
             };
         }
     }
-    std.fs.makeDirAbsolute(path) catch |e| switch (e) {
+    std.Io.Dir.createDirAbsolute(io.get(), path, .default_dir) catch |e| switch (e) {
         error.PathAlreadyExists => {},
         else => return e,
     };
@@ -532,7 +508,7 @@ fn findFreeDisplay(alloc: Allocator) ![]const u8 {
     for (99..111) |n| {
         const lock_path = std.fmt.allocPrint(alloc, "/tmp/.X{d}-lock", .{n}) catch continue;
         defer alloc.free(lock_path);
-        std.fs.accessAbsolute(lock_path, .{}) catch {
+        std.Io.Dir.accessAbsolute(io.get(), lock_path, .{}) catch {
             return try std.fmt.allocPrint(alloc, ":{d}", .{n});
         };
     }
@@ -752,7 +728,7 @@ fn waitForSurface(h: *Harness) TestError!void {
     while (elapsed < timeout) {
         const probe = try h.call("surface.read_screen", null);
         if (probe.ok) return;
-        std.Thread.sleep(Harness.POLL_INTERVAL_MS * std.time.ns_per_ms);
+        io.sleep(Harness.POLL_INTERVAL_MS * std.time.ns_per_ms);
         elapsed += Harness.POLL_INTERVAL_MS;
     }
     return TestError.Skip;
@@ -1014,7 +990,7 @@ fn testWindowLifecycle(h: *Harness) TestError!void {
                 if (w == .array and w.array.items.len == count_before) return;
             }
         }
-        std.Thread.sleep(100 * std.time.ns_per_ms);
+        io.sleep(100 * std.time.ns_per_ms);
         elapsed += 100;
     }
     return TestError.Timeout;
@@ -1084,10 +1060,9 @@ fn testWorkspaceMoveToWindow(h: *Harness) TestError!void {
                 if (w == .array and w.array.items.len == 1) break;
             }
         }
-        std.Thread.sleep(100 * std.time.ns_per_ms);
+        io.sleep(100 * std.time.ns_per_ms);
         elapsed += 100;
     }
-
 }
 
 fn testSurfaceExpel(h: *Harness) TestError!void {

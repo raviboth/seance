@@ -6,7 +6,7 @@
   git,
   ncurses,
   pkg-config,
-  zig_0_15,
+  zig_0_16,
   libnotify,
   libcanberra,
   adwaita-icon-theme,
@@ -55,7 +55,7 @@ in
       git
       ncurses
       pkg-config
-      zig_0_15
+      zig_0_16
       wrapGAppsHook4
     ];
 

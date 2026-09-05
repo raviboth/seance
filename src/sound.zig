@@ -1,4 +1,5 @@
 const std = @import("std");
+const io = @import("io.zig");
 const builtin = @import("builtin");
 const c = @import("c.zig").c;
 const config_mod = @import("config.zig");
@@ -67,7 +68,7 @@ pub const SoundPlayer = struct {
     }
 
     fn playThrottledEvent(self: *SoundPlayer, sound: config_mod.NotificationSound) void {
-        const now = std.time.milliTimestamp();
+        const now = io.milliTimestamp();
         if (now - self.last_play_time < min_interval_ms) return;
         self.last_play_time = now;
 
@@ -81,7 +82,7 @@ pub const SoundPlayer = struct {
     }
 
     fn playThrottledCustom(self: *SoundPlayer, path: []const u8) void {
-        const now = std.time.milliTimestamp();
+        const now = io.milliTimestamp();
         if (now - self.last_play_time < min_interval_ms) return;
         self.last_play_time = now;
         self.playCustom(path);

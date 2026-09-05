@@ -114,7 +114,7 @@ mv seance-*-x86_64.AppImage ~/.local/bin/seance
 
 ### Building from source
 
-Requires Zig **0.15.2+**, GTK4, libadwaita, OpenGL 4.3+, and Linux (X11 or Wayland).
+Requires Zig **0.16.x**, GTK4, libadwaita, OpenGL 4.3+, and Linux (X11 or Wayland).
 
 ```bash
 git clone --recursive https://github.com/no1msd/seance.git

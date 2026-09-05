@@ -4,7 +4,8 @@
 //    or: seance <command> [args...]  (when symlinked)
 
 const std = @import("std");
-const posix = std.posix;
+const io = @import("io.zig");
+const posix = @import("posix.zig");
 const Allocator = std.mem.Allocator;
 const JsonValue = std.json.Value;
 const Stringify = std.json.Stringify;
@@ -12,11 +13,11 @@ const Stringify = std.json.Stringify;
 // ── Entry point ─────────────────────────────────────────────────────────
 
 /// Run the CLI. `skip` is how many argv entries to skip (1 for "seance", 2 for "seance ctl").
-pub fn run(skip: usize) u8 {
+pub fn run(process_args: std.process.Args, skip: usize) u8 {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const alloc = arena.allocator();
 
-    const all_args = std.process.argsAlloc(alloc) catch {
+    const all_args = process_args.toSlice(alloc) catch {
         werr("seance: failed to read arguments\n");
         return 1;
     };
@@ -174,7 +175,7 @@ fn apiCall(alloc: Allocator, socket_path: []const u8, method: []const u8, params
     else
         std.fmt.allocPrint(alloc, "{{\"id\":\"1\",\"method\":\"{s}\"}}\n", .{method}) catch return SocketErr.WriteFailed;
 
-    std.fs.accessAbsolute(socket_path, .{}) catch return SocketErr.NotRunning;
+    std.Io.Dir.accessAbsolute(io.get(), socket_path, .{}) catch return SocketErr.NotRunning;
 
     const sock = posix.socket(posix.AF.UNIX, posix.SOCK.STREAM, 0) catch return SocketErr.ConnectFailed;
     defer posix.close(sock);
@@ -229,7 +230,7 @@ fn apiCall(alloc: Allocator, socket_path: []const u8, method: []const u8, params
         return SocketErr.ReadFailed;
     }
 
-    const result = parsed.value.object.get("result") orelse JsonValue{ .object = std.json.ObjectMap.init(alloc) };
+    const result = parsed.value.object.get("result") orelse JsonValue{ .object = .empty };
 
     return ApiResponse{
         .ok = true,
@@ -985,9 +986,7 @@ fn cmdResizeColumn(ctx: Ctx) u8 {
     var mode: ?[]const u8 = null;
     var ri: usize = 0;
     while (ri < ctx.rest.len) : (ri += 1) {
-        if (eql(ctx.rest[ri], "--wider")) mode = "wider"
-        else if (eql(ctx.rest[ri], "--narrower")) mode = "narrower"
-        else if (eql(ctx.rest[ri], "--maximize")) mode = "maximize";
+        if (eql(ctx.rest[ri], "--wider")) mode = "wider" else if (eql(ctx.rest[ri], "--narrower")) mode = "narrower" else if (eql(ctx.rest[ri], "--maximize")) mode = "maximize";
     }
     const m = mode orelse {
         werr("usage: resize-column --wider|--narrower|--maximize [--workspace N]\n");
@@ -1017,8 +1016,7 @@ fn cmdResizeRow(ctx: Ctx) u8 {
     var mode: ?[]const u8 = null;
     var ri: usize = 0;
     while (ri < ctx.rest.len) : (ri += 1) {
-        if (eql(ctx.rest[ri], "--taller")) mode = "taller"
-        else if (eql(ctx.rest[ri], "--shorter")) mode = "shorter";
+        if (eql(ctx.rest[ri], "--taller")) mode = "taller" else if (eql(ctx.rest[ri], "--shorter")) mode = "shorter";
     }
     const m = mode orelse {
         werr("usage: resize-row --taller|--shorter [--surface N] [--workspace N]\n");
@@ -1280,13 +1278,13 @@ fn cmdAgentHook(ctx: Ctx, agent: AgentConfig) u8 {
     }
 
     // Read stdin (hook payload)
-    const stdin_file: std.fs.File = .stdin();
-    const stdin_data = stdin_file.readToEndAlloc(ctx.alloc, 1024 * 1024) catch "";
+    const stdin_file: std.Io.File = .stdin();
+    const stdin_data = io.readToEndAlloc(stdin_file, ctx.alloc, 1024 * 1024) catch "";
     const input = blk: {
         const trimmed = std.mem.trim(u8, stdin_data, &[_]u8{ '\r', '\n', ' ' });
-        if (trimmed.len == 0) break :blk JsonValue{ .object = std.json.ObjectMap.init(ctx.alloc) };
+        if (trimmed.len == 0) break :blk JsonValue{ .object = .empty };
         const parsed = std.json.parseFromSlice(JsonValue, ctx.alloc, trimmed, .{}) catch
-            break :blk JsonValue{ .object = std.json.ObjectMap.init(ctx.alloc) };
+            break :blk JsonValue{ .object = .empty };
         break :blk parsed.value;
     };
 
@@ -1367,7 +1365,7 @@ fn agentHookSessionStart(h: HookCtx) u8 {
         if (h.workspace) |w| fields.putInt("workspace_id", w);
         if (h.surface) |s| fields.putInt("surface_id", s);
         fields.putInt("pid", pid);
-        fields.putFloat("started_at", @floatFromInt(std.time.timestamp()));
+        fields.putFloat("started_at", @floatFromInt(io.timestamp()));
         if (cwd) |c| fields.putStr("cwd", c);
         h.store.upsert(sid, fields);
     }
@@ -1527,8 +1525,8 @@ fn agentHookSessionEnd(h: HookCtx) u8 {
     }
 
     if (h.agent.session_dir_env) |env_name| {
-        if (std.posix.getenv(env_name)) |dir| {
-            std.fs.deleteTreeAbsolute(dir) catch {};
+        if (io.getenv(env_name)) |dir| {
+            std.Io.Dir.cwd().deleteTree(io.get(), dir) catch {};
         }
     }
 
@@ -1718,10 +1716,10 @@ const SessionStore = struct {
     alloc: Allocator,
 
     fn init(alloc: Allocator) SessionStore {
-        if (std.posix.getenv("SEANCE_CLAUDE_HOOK_STATE_PATH")) |p| {
+        if (io.getenv("SEANCE_CLAUDE_HOOK_STATE_PATH")) |p| {
             return .{ .path = p, .alloc = alloc };
         }
-        const home = std.posix.getenv("HOME") orelse "/tmp";
+        const home = io.getenv("HOME") orelse "/tmp";
         const path = std.fmt.allocPrint(alloc, "{s}/.seance/claude-hook-sessions.json", .{home}) catch "/tmp/claude-hook-sessions.json";
         return .{ .path = path, .alloc = alloc };
     }
@@ -1735,9 +1733,9 @@ const SessionStore = struct {
 
     fn upsert(self: SessionStore, session_id: []const u8, fields: JsonFields) void {
         var data = self.readStore() orelse blk: {
-            var obj = std.json.ObjectMap.init(self.alloc);
-            obj.put("version", JsonValue{ .integer = 1 }) catch return;
-            obj.put("sessions", JsonValue{ .object = std.json.ObjectMap.init(self.alloc) }) catch return;
+            var obj: std.json.ObjectMap = .empty;
+            obj.put(self.alloc, "version", JsonValue{ .integer = 1 }) catch return;
+            obj.put(self.alloc, "sessions", JsonValue{ .object = .empty }) catch return;
             break :blk JsonValue{ .object = obj };
         };
 
@@ -1745,17 +1743,17 @@ const SessionStore = struct {
         if (sessions.* != .object) return;
 
         if (!sessions.object.contains(session_id)) {
-            var rec = std.json.ObjectMap.init(self.alloc);
-            rec.put("session_id", JsonValue{ .string = session_id }) catch {};
-            sessions.object.put(session_id, JsonValue{ .object = rec }) catch {};
+            var rec: std.json.ObjectMap = .empty;
+            rec.put(self.alloc, "session_id", JsonValue{ .string = session_id }) catch {};
+            sessions.object.put(self.alloc, session_id, JsonValue{ .object = rec }) catch {};
         }
 
         if (sessions.object.getPtr(session_id)) |rec_ptr| {
             if (rec_ptr.* == .object) {
                 for (fields.keys.items, fields.values.items) |k, v| {
-                    rec_ptr.object.put(k, v) catch {};
+                    rec_ptr.object.put(self.alloc, k, v) catch {};
                 }
-                rec_ptr.object.put("updated_at", JsonValue{ .float = @floatFromInt(std.time.timestamp()) }) catch {};
+                rec_ptr.object.put(self.alloc, "updated_at", JsonValue{ .float = @floatFromInt(io.timestamp()) }) catch {};
             }
         }
 
@@ -1777,9 +1775,9 @@ const SessionStore = struct {
     }
 
     fn readStore(self: SessionStore) ?JsonValue {
-        const file = std.fs.openFileAbsolute(self.path, .{}) catch return null;
-        defer file.close();
-        const content = file.readToEndAlloc(self.alloc, 1024 * 1024) catch return null;
+        const file = std.Io.Dir.openFileAbsolute(io.get(), self.path, .{}) catch return null;
+        defer file.close(io.get());
+        const content = io.readToEndAlloc(file, self.alloc, 1024 * 1024) catch return null;
         if (content.len == 0) return null;
         const parsed = std.json.parseFromSlice(JsonValue, self.alloc, content, .{}) catch return null;
         if (parsed.value != .object) return null;
@@ -1792,23 +1790,23 @@ const SessionStore = struct {
     fn writeStore(self: SessionStore, data: JsonValue) void {
         // Ensure parent directory exists
         if (std.mem.lastIndexOfScalar(u8, self.path, '/')) |sep| {
-            std.fs.makeDirAbsolute(self.path[0..sep]) catch |e| switch (e) {
+            std.Io.Dir.createDirAbsolute(io.get(), self.path[0..sep], .default_dir) catch |e| switch (e) {
                 error.PathAlreadyExists => {},
                 else => return,
             };
         }
 
-        const file = std.fs.createFileAbsolute(self.path, .{}) catch return;
-        defer file.close();
+        const file = std.Io.Dir.createFileAbsolute(io.get(), self.path, .{}) catch return;
+        defer file.close(io.get());
 
         // Serialize using Stringify.valueAlloc and write
         const json_bytes = Stringify.valueAlloc(self.alloc, data, .{ .whitespace = .indent_2 }) catch return;
-        file.writeAll(json_bytes) catch return;
+        file.writeStreamingAll(io.get(), json_bytes) catch return;
     }
 
     fn pruneOld(self: SessionStore, sessions: *JsonValue) void {
         if (sessions.* != .object) return;
-        const cutoff: f64 = @floatFromInt(std.time.timestamp() - 7 * 86400);
+        const cutoff: f64 = @floatFromInt(io.timestamp() - 7 * 86400);
         var to_remove: std.ArrayList([]const u8) = .empty;
         var it = sessions.object.iterator();
         while (it.next()) |entry| {
@@ -1976,19 +1974,19 @@ fn prettyLabel(key: []const u8) []const u8 {
 }
 
 fn wout(s: []const u8) void {
-    const f: std.fs.File = .stdout();
-    f.writeAll(s) catch {};
+    const f: std.Io.File = .stdout();
+    f.writeStreamingAll(io.get(), s) catch {};
 }
 
 fn werr(s: []const u8) void {
-    const f: std.fs.File = .stderr();
-    f.writeAll(s) catch {};
+    const f: std.Io.File = .stderr();
+    f.writeStreamingAll(io.get(), s) catch {};
 }
 
 fn wfmt(comptime fmt: []const u8, args: anytype) void {
-    const f: std.fs.File = .stdout();
+    const f: std.Io.File = .stdout();
     var buf: [4096]u8 = undefined;
-    var w = f.writer(&buf);
+    var w = f.writer(io.get(), &buf);
     w.interface.print(fmt, args) catch {};
     w.interface.flush() catch {};
 }
@@ -2004,7 +2002,7 @@ fn parseU64(s: []const u8) ?u64 {
 }
 
 fn envInt(name: []const u8) ?u64 {
-    const val = std.posix.getenv(name) orelse return null;
+    const val = io.getenv(name) orelse return null;
     return parseU64(val);
 }
 
@@ -2020,12 +2018,12 @@ fn findNamedArg(args: []const []const u8, name: []const u8) ?[]const u8 {
 
 fn getSocketPath(override: ?[]const u8, buf: []u8) ?[]const u8 {
     if (override) |p| return p;
-    if (std.posix.getenv("SEANCE_SOCKET_PATH")) |p| return p;
+    if (io.getenv("SEANCE_SOCKET_PATH")) |p| return p;
     // Match SocketServer.resolvedPath: prefer XDG_RUNTIME_DIR, fall back to $HOME/.seance/
-    if (std.posix.getenv("XDG_RUNTIME_DIR")) |runtime_dir| {
+    if (io.getenv("XDG_RUNTIME_DIR")) |runtime_dir| {
         return std.fmt.bufPrint(buf, "{s}/seance/seance.sock", .{runtime_dir}) catch null;
     }
-    const home = std.posix.getenv("HOME") orelse return null;
+    const home = io.getenv("HOME") orelse return null;
     return std.fmt.bufPrint(buf, "{s}/.seance/seance.sock", .{home}) catch null;
 }
 

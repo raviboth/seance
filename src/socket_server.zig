@@ -1,4 +1,6 @@
 const std = @import("std");
+const io = @import("io.zig");
+const posix = @import("posix.zig");
 const c = @import("c.zig").c;
 
 pub const SocketServer = struct {
@@ -17,10 +19,10 @@ pub const SocketServer = struct {
             @memcpy(buf[0..len], cfg.socket_path[0..len]);
             return buf[0..len];
         }
-        if (std.posix.getenv("XDG_RUNTIME_DIR")) |runtime_dir| {
+        if (io.getenv("XDG_RUNTIME_DIR")) |runtime_dir| {
             return std.fmt.bufPrint(buf, "{s}/seance/seance.sock", .{runtime_dir}) catch null;
         }
-        const home = std.posix.getenv("HOME") orelse return null;
+        const home = io.getenv("HOME") orelse return null;
         return std.fmt.bufPrint(buf, "{s}/.seance/seance.sock", .{home}) catch null;
     }
 
@@ -33,7 +35,7 @@ pub const SocketServer = struct {
             var dir_buf: [std.fs.max_path_bytes]u8 = undefined;
             if (sep <= dir_buf.len) {
                 @memcpy(dir_buf[0..sep], path[0..sep]);
-                std.fs.makeDirAbsolute(dir_buf[0..sep]) catch |e| switch (e) {
+                std.Io.Dir.createDirAbsolute(io.get(), dir_buf[0..sep], .default_dir) catch |e| switch (e) {
                     error.PathAlreadyExists => {},
                     else => return,
                 };
@@ -46,43 +48,43 @@ pub const SocketServer = struct {
 
         // Remove stale socket file — but first check if another instance owns it
         // by attempting a connect.  If it succeeds, another seance is alive.
-        if (std.fs.accessAbsolute(path, .{})) {
+        if (std.Io.Dir.accessAbsolute(io.get(), path, .{})) {
             if (isSocketAlive(path)) {
                 std.log.warn("socket_server: another seance instance is using {s}", .{path});
                 std.log.err("seance: another instance is already running ({s})", .{path});
                 return;
             }
             // Socket is stale, safe to remove
-            std.posix.unlink(path) catch {};
+            posix.unlink(path) catch {};
         } else |_| {}
 
         // Create Unix domain socket
-        const fd = std.posix.socket(std.posix.AF.UNIX, std.posix.SOCK.STREAM | std.posix.SOCK.NONBLOCK, 0) catch return;
+        const fd = posix.socket(posix.AF.UNIX, posix.SOCK.STREAM | posix.SOCK.NONBLOCK, 0) catch return;
         self.fd = @intCast(fd);
 
         // Bind
-        var addr = std.posix.sockaddr.un{ .path = undefined, .family = std.posix.AF.UNIX };
+        var addr = posix.sockaddr.un{ .path = undefined, .family = posix.AF.UNIX };
         @memset(&addr.path, 0);
         const copy_len = @min(path.len, addr.path.len - 1);
         for (0..copy_len) |i| {
             addr.path[i] = @intCast(path[i]);
         }
-        std.posix.bind(fd, @ptrCast(&addr), @sizeOf(std.posix.sockaddr.un)) catch {
-            std.posix.close(fd);
+        posix.bind(fd, @ptrCast(&addr), @sizeOf(posix.sockaddr.un)) catch {
+            posix.close(fd);
             self.fd = -1;
             return;
         };
 
         // Restrict socket to owner-only access
-        std.posix.fchmod(fd, 0o600) catch {
-            std.posix.close(fd);
+        posix.fchmod(fd, 0o600) catch {
+            posix.close(fd);
             self.fd = -1;
             return;
         };
 
         // Listen
-        std.posix.listen(fd, 128) catch {
-            std.posix.close(fd);
+        posix.listen(fd, 128) catch {
+            posix.close(fd);
             self.fd = -1;
             return;
         };
@@ -101,26 +103,26 @@ pub const SocketServer = struct {
             self.watch_id = 0;
         }
         if (self.fd >= 0) {
-            std.posix.close(@intCast(self.fd));
+            posix.close(@intCast(self.fd));
             self.fd = -1;
         }
         if (self.path_len > 0) {
-            std.posix.unlink(self.path_buf[0..self.path_len]) catch {};
+            posix.unlink(self.path_buf[0..self.path_len]) catch {};
             self.path_len = 0;
         }
     }
 
     /// Check if a socket file is owned by a running instance by trying to connect.
     fn isSocketAlive(path: []const u8) bool {
-        const probe = std.posix.socket(std.posix.AF.UNIX, std.posix.SOCK.STREAM, 0) catch return false;
-        defer std.posix.close(probe);
-        var addr = std.posix.sockaddr.un{ .path = undefined, .family = std.posix.AF.UNIX };
+        const probe = posix.socket(posix.AF.UNIX, posix.SOCK.STREAM, 0) catch return false;
+        defer posix.close(probe);
+        var addr = posix.sockaddr.un{ .path = undefined, .family = posix.AF.UNIX };
         @memset(&addr.path, 0);
         const plen = @min(path.len, addr.path.len - 1);
         for (0..plen) |i| {
             addr.path[i] = @intCast(path[i]);
         }
-        if (std.posix.connect(probe, @ptrCast(&addr), @sizeOf(std.posix.sockaddr.un))) |_| {
+        if (posix.connect(probe, @ptrCast(&addr), @sizeOf(posix.sockaddr.un))) |_| {
             return true;
         } else |_| {
             return false;
@@ -132,18 +134,18 @@ pub const SocketServer = struct {
         if (self.fd < 0) return 0;
 
         // Accept connection
-        const conn_fd = std.posix.accept(@intCast(self.fd), null, null, 0) catch return 1;
-        defer std.posix.close(conn_fd);
+        const conn_fd = posix.accept(@intCast(self.fd), null, null, 0) catch return 1;
+        defer posix.close(conn_fd);
 
         // Guard: don't let a slow client stall the GTK main thread.
         // Data from local Unix sockets arrives in microseconds; 10 ms is generous.
-        var pfd = [1]std.posix.pollfd{.{
+        var pfd = [1]posix.pollfd{.{
             .fd = conn_fd,
-            .events = std.posix.POLL.IN,
+            .events = posix.POLL.IN,
             .revents = 0,
         }};
-        _ = std.posix.poll(&pfd, 10) catch return 1;
-        if (pfd[0].revents & std.posix.POLL.IN == 0) return 1;
+        _ = posix.poll(&pfd, 10) catch return 1;
+        if (pfd[0].revents & posix.POLL.IN == 0) return 1;
 
         // Read command. Sized to accommodate a 4096-byte text payload in its
         // worst-case JSON encoding: every byte expanded to `\u00XX` (6 bytes)
@@ -152,23 +154,23 @@ pub const SocketServer = struct {
         var buf: [32768]u8 = undefined;
         var total: usize = 0;
         while (total < buf.len) {
-            const n = std.posix.read(conn_fd, buf[total..]) catch break;
+            const n = posix.read(conn_fd, buf[total..]) catch break;
             if (n == 0) break;
             total += n;
             if (std.mem.indexOfScalar(u8, buf[0..total], '\n') != null) break;
-            var pfd2 = [1]std.posix.pollfd{.{ .fd = conn_fd, .events = std.posix.POLL.IN, .revents = 0 }};
-            const ready = std.posix.poll(&pfd2, 10) catch break;
+            var pfd2 = [1]posix.pollfd{.{ .fd = conn_fd, .events = posix.POLL.IN, .revents = 0 }};
+            const ready = posix.poll(&pfd2, 10) catch break;
             if (ready == 0) break;
-            if (pfd2[0].revents & std.posix.POLL.IN == 0) break;
+            if (pfd2[0].revents & posix.POLL.IN == 0) break;
         }
         if (total == 0) return 1;
 
         // Trim trailing newline/whitespace
-        const line = std.mem.trimRight(u8, buf[0..total], &[_]u8{ '\r', '\n', ' ' });
+        const line = std.mem.trimEnd(u8, buf[0..total], &[_]u8{ '\r', '\n', ' ' });
 
         var resp_buf: [16384]u8 = undefined;
         const response = handleJsonRequest(line, &resp_buf);
-        _ = std.posix.write(conn_fd, response) catch {};
+        _ = posix.write(conn_fd, response) catch {};
 
         return 1; // continue watching
     }
@@ -1175,11 +1177,7 @@ pub const SocketServer = struct {
             if (plus == 0) break;
             const name = rest[0..plus];
             const bit: c_uint =
-                if (eql(name, "ctrl") or eql(name, "control")) c.GHOSTTY_MODS_CTRL
-                else if (eql(name, "shift")) c.GHOSTTY_MODS_SHIFT
-                else if (eql(name, "alt") or eql(name, "option")) c.GHOSTTY_MODS_ALT
-                else if (eql(name, "super") or eql(name, "meta") or eql(name, "cmd") or eql(name, "command")) c.GHOSTTY_MODS_SUPER
-                else break;
+                if (eql(name, "ctrl") or eql(name, "control")) c.GHOSTTY_MODS_CTRL else if (eql(name, "shift")) c.GHOSTTY_MODS_SHIFT else if (eql(name, "alt") or eql(name, "option")) c.GHOSTTY_MODS_ALT else if (eql(name, "super") or eql(name, "meta") or eql(name, "cmd") or eql(name, "command")) c.GHOSTTY_MODS_SUPER else break;
             mods |= bit;
             rest = rest[plus + 1 ..];
         }
@@ -1251,21 +1249,48 @@ pub const SocketServer = struct {
 
     fn letterKeycode(ch: u8) ?u32 {
         return switch (ch) {
-            'a' => 0x26, 'b' => 0x38, 'c' => 0x36, 'd' => 0x28,
-            'e' => 0x1a, 'f' => 0x29, 'g' => 0x2a, 'h' => 0x2b,
-            'i' => 0x1f, 'j' => 0x2c, 'k' => 0x2d, 'l' => 0x2e,
-            'm' => 0x3a, 'n' => 0x39, 'o' => 0x20, 'p' => 0x21,
-            'q' => 0x18, 'r' => 0x1b, 's' => 0x27, 't' => 0x1c,
-            'u' => 0x1e, 'v' => 0x37, 'w' => 0x19, 'x' => 0x35,
-            'y' => 0x1d, 'z' => 0x34,
+            'a' => 0x26,
+            'b' => 0x38,
+            'c' => 0x36,
+            'd' => 0x28,
+            'e' => 0x1a,
+            'f' => 0x29,
+            'g' => 0x2a,
+            'h' => 0x2b,
+            'i' => 0x1f,
+            'j' => 0x2c,
+            'k' => 0x2d,
+            'l' => 0x2e,
+            'm' => 0x3a,
+            'n' => 0x39,
+            'o' => 0x20,
+            'p' => 0x21,
+            'q' => 0x18,
+            'r' => 0x1b,
+            's' => 0x27,
+            't' => 0x1c,
+            'u' => 0x1e,
+            'v' => 0x37,
+            'w' => 0x19,
+            'x' => 0x35,
+            'y' => 0x1d,
+            'z' => 0x34,
             else => null,
         };
     }
 
     fn digitKeycode(ch: u8) ?u32 {
         return switch (ch) {
-            '1' => 0x0a, '2' => 0x0b, '3' => 0x0c, '4' => 0x0d, '5' => 0x0e,
-            '6' => 0x0f, '7' => 0x10, '8' => 0x11, '9' => 0x12, '0' => 0x13,
+            '1' => 0x0a,
+            '2' => 0x0b,
+            '3' => 0x0c,
+            '4' => 0x0d,
+            '5' => 0x0e,
+            '6' => 0x0f,
+            '7' => 0x10,
+            '8' => 0x11,
+            '9' => 0x12,
+            '0' => 0x13,
             else => null,
         };
     }
@@ -1291,9 +1316,18 @@ pub const SocketServer = struct {
         if (name.len < 2 or name[0] != 'f') return null;
         const n = std.fmt.parseInt(u8, name[1..], 10) catch return null;
         return switch (n) {
-            1 => 0x43, 2 => 0x44, 3 => 0x45, 4 => 0x46, 5 => 0x47,
-            6 => 0x48, 7 => 0x49, 8 => 0x4a, 9 => 0x4b, 10 => 0x4c,
-            11 => 0x5f, 12 => 0x60,
+            1 => 0x43,
+            2 => 0x44,
+            3 => 0x45,
+            4 => 0x46,
+            5 => 0x47,
+            6 => 0x48,
+            7 => 0x49,
+            8 => 0x4a,
+            9 => 0x4b,
+            10 => 0x4c,
+            11 => 0x5f,
+            12 => 0x60,
             else => null,
         };
     }
@@ -1819,7 +1853,7 @@ pub const SocketServer = struct {
             .info;
 
         const result = findWorkspaceById(ws_id) orelse return writeJsonError(buf, id, "not_found", "Workspace not found");
-        result.ws.appendLog(message, level, std.time.timestamp());
+        result.ws.appendLog(message, level, io.timestamp());
         result.state.sidebar.refresh();
         result.state.sidebar.setActive(result.state.active_workspace);
         return writeJsonOk(buf, id, "{}");
@@ -1985,7 +2019,6 @@ pub const SocketServer = struct {
         const fp = fg.focusedTerminalPane() orelse return false;
         return fp.id == pane_id;
     }
-
 };
 
 fn copySlice(dest: []u8, src: []const u8) usize {

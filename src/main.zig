@@ -1,4 +1,5 @@
 const std = @import("std");
+const io = @import("io.zig");
 const c = @import("c.zig").c;
 const App = @import("app.zig");
 const ctl = @import("ctl.zig");
@@ -7,14 +8,15 @@ pub const std_options: std.Options = .{
     .log_level = .info,
 };
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
+    io.init(init.io);
     // Check if invoked as "seance ctl ..." → enter CLI mode
-    var arg_it = std.process.args();
+    var arg_it = std.process.Args.Iterator.init(init.minimal.args);
     _ = arg_it.next(); // skip argv0
 
     if (arg_it.next()) |arg1| {
         if (std.mem.eql(u8, arg1, "ctl")) {
-            std.process.exit(ctl.run(2));
+            std.process.exit(ctl.run(init.minimal.args, 2));
         }
         if (std.mem.eql(u8, arg1, "--help") or std.mem.eql(u8, arg1, "-h") or std.mem.eql(u8, arg1, "help")) {
             ctl.printTopLevelUsage();

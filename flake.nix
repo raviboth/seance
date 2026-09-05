@@ -35,7 +35,7 @@
     devShells = forAllSystems (pkgs: {
       default = pkgs.mkShell {
         packages = [
-          zig.packages.${pkgs.stdenv.hostPlatform.system}."0.15.2"
+          zig.packages.${pkgs.stdenv.hostPlatform.system}."0.16.0"
           pkgs.pkg-config
           pkgs.ncurses
         ];

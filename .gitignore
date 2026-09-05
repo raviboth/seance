@@ -3,3 +3,4 @@ zig-out/
 __pycache__/
 plans
 campaign/
+zig-pkg/

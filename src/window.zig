@@ -1,4 +1,5 @@
 const std = @import("std");
+const io = @import("io.zig");
 const builtin = @import("builtin");
 const c = @import("c.zig").c;
 const config_mod = @import("config.zig");
@@ -394,11 +395,11 @@ pub const WindowState = struct {
 
         // Clean up Pi session dirs (deterministic path based on surface id).
         // This handles SIGKILL/OOM where the SessionEnd hook never fires.
-        if (std.posix.getenv("HOME")) |home| {
+        if (io.getenv("HOME")) |home| {
             var path_buf: [std.fs.max_path_bytes]u8 = undefined;
             const pi_path = std.fmt.bufPrint(&path_buf, "{s}/.cache/seance-pi/{d}", .{ home, pane_id }) catch "";
             if (pi_path.len > 0) {
-                std.fs.deleteTreeAbsolute(pi_path) catch {};
+                std.Io.Dir.cwd().deleteTree(io.get(), pi_path) catch {};
             }
         }
 
@@ -543,7 +544,6 @@ pub const WindowState = struct {
             if (!r.shell_has_git) {
                 r.git_dirty = git_info.isDirty(alloc, cwd);
             }
-
         }
 
         // Post results back to GTK main thread
@@ -1367,7 +1367,7 @@ pub fn create(wm: *WindowManager) !*WindowState {
 
     // Detect GNOME once and cache on state; the env var is stable for the
     // process lifetime and applyDecorationMode reads it on every reload.
-    const desktop = std.posix.getenv("XDG_CURRENT_DESKTOP") orelse "";
+    const desktop = io.getenv("XDG_CURRENT_DESKTOP") orelse "";
     state.is_gnome = std.mem.indexOf(u8, desktop, "GNOME") != null;
     state.effective_decoration = resolveEffectiveDecoration(config.decoration_mode, state.is_gnome);
 
@@ -2111,8 +2111,8 @@ fn loadThemeCss() void {
     const accent_fg: []const u8 = &colors.accent_fg;
     const notify: []const u8 = &colors.notify_border;
     var css_buf: [10240]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&css_buf);
-    const w = stream.writer();
+    var stream = std.Io.Writer.fixed(&css_buf);
+    const w = &stream;
 
     // Override libadwaita's named colors with the terminal theme colors
     // so that all UI chrome (@window_bg_color, @window_fg_color refs) matches the terminal.
@@ -2300,7 +2300,7 @@ fn loadThemeCss() void {
         \\
     , .{}) catch return;
 
-    const pos = stream.pos;
+    const pos = stream.end;
     if (pos >= css_buf.len) return;
     css_buf[pos] = 0;
 

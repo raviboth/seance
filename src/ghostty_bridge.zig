@@ -1,7 +1,7 @@
 const std = @import("std");
+const io = @import("io.zig");
 const builtin = @import("builtin");
 const c = @import("c.zig").c;
-const posix_c = @cImport(@cInclude("stdlib.h"));
 const config_mod = @import("config.zig");
 const pane_mod = @import("pane.zig");
 const Pane = pane_mod.Pane;
@@ -48,13 +48,13 @@ pub fn getGhosttyOrigResourcesDir() ?[]const u8 {
 /// move share/ghostty under share/seance/ghostty to avoid conflicts).
 fn findSeanceThemesDir() void {
     var exe_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const exe_path = std.fs.selfExePath(&exe_buf) catch return;
+    const exe_path = io.executablePath(&exe_buf) catch return;
     const exe_dir = std.fs.path.dirname(exe_path) orelse return;
     const prefix = std.fs.path.dirname(exe_dir) orelse return;
     const suffixes = [_][]const u8{ "share/seance/ghostty/themes", "share/ghostty/themes" };
     for (suffixes) |suffix| {
         const path = std.fmt.bufPrint(&seance_themes_dir_buf, "{s}/{s}", .{ prefix, suffix }) catch return;
-        if (std.fs.accessAbsolute(path, .{})) {
+        if (std.Io.Dir.accessAbsolute(io.get(), path, .{})) {
             seance_themes_dir_len = path.len;
             return;
         } else |_| {}
@@ -69,7 +69,7 @@ fn ensureResourcesDir() void {
     findSeanceThemesDir();
 
     // Step 1: locate ghostty's real resources
-    if (std.posix.getenv("GHOSTTY_RESOURCES_DIR")) |existing| {
+    if (io.getenv("GHOSTTY_RESOURCES_DIR")) |existing| {
         const len = existing.len;
         if (len >= ghostty_orig_resources.len) return;
         @memcpy(ghostty_orig_resources[0..len], existing[0..len]);
@@ -82,10 +82,10 @@ fn ensureResourcesDir() void {
 
     // Step 2: create a wrapper dir that injects seance shell integration
     if (createWrapperResourcesDir()) {
-        _ = posix_c.setenv("GHOSTTY_RESOURCES_DIR", @ptrCast(&wrapper_dir_buf), 1);
+        _ = c.setenv("GHOSTTY_RESOURCES_DIR", @ptrCast(&wrapper_dir_buf), 1);
         std.log.debug("ghostty_bridge: using wrapper resources dir: {s}", .{wrapper_dir_buf[0..wrapper_dir_len]});
     } else {
-        _ = posix_c.setenv("GHOSTTY_RESOURCES_DIR", @ptrCast(&ghostty_orig_resources), 1);
+        _ = c.setenv("GHOSTTY_RESOURCES_DIR", @ptrCast(&ghostty_orig_resources), 1);
         std.log.debug("ghostty_bridge: using ghostty resources dir: {s}", .{ghostty_orig_resources[0..ghostty_orig_resources_len]});
     }
 }
@@ -99,7 +99,7 @@ fn findGhosttyResourcesDir() bool {
     const suffixes = [_][]const u8{ "share/seance/ghostty", "share/ghostty" };
 
     var exe_buf: [std.fs.max_path_bytes]u8 = undefined;
-    if (std.fs.selfExePath(&exe_buf)) |exe_path| {
+    if (io.executablePath(&exe_buf)) |exe_path| {
         if (std.fs.path.dirname(exe_path)) |exe_dir| {
             if (std.fs.path.dirname(exe_dir)) |prefix| {
                 for (suffixes) |suffix| {
@@ -125,7 +125,7 @@ fn tryGhosttyResourcesAt(prefix: []const u8, suffix: []const u8) bool {
     const res_slice = std.mem.sliceTo(res_path, 0);
     var check_buf: [std.fs.max_path_bytes]u8 = undefined;
     const check_path = std.fmt.bufPrint(&check_buf, "{s}/shell-integration", .{res_slice}) catch return false;
-    std.fs.accessAbsolute(check_path, .{}) catch return false;
+    std.Io.Dir.accessAbsolute(io.get(), check_path, .{}) catch return false;
     ghostty_orig_resources_len = res_slice.len;
     return true;
 }
@@ -137,7 +137,7 @@ fn createWrapperResourcesDir() bool {
     const real = ghostty_orig_resources[0..ghostty_orig_resources_len];
     if (real.len == 0) return false;
 
-    const runtime_dir = std.posix.getenv("XDG_RUNTIME_DIR") orelse return false;
+    const runtime_dir = io.getenv("XDG_RUNTIME_DIR") orelse return false;
     const pid = std.c.getpid();
 
     // Create a parent dir that holds both the resources subdir and a terminfo
@@ -148,64 +148,64 @@ fn createWrapperResourcesDir() bool {
     const parent_path = std.fmt.bufPrintZ(&parent_buf, "{s}/seance-resources-{d}", .{ runtime_dir, pid }) catch return false;
 
     // Clean any stale wrapper dir from a previous crashed instance with the same PID
-    std.fs.deleteTreeAbsolute(parent_path) catch {};
-    std.fs.makeDirAbsolute(parent_path) catch return false;
+    std.Io.Dir.cwd().deleteTree(io.get(), parent_path) catch {};
+    std.Io.Dir.createDirAbsolute(io.get(), parent_path, .default_dir) catch return false;
 
     // Resources subdir — this is what GHOSTTY_RESOURCES_DIR will point to
     const wrapper_path = std.fmt.bufPrintZ(&wrapper_dir_buf, "{s}/ghostty", .{parent_path}) catch return false;
     wrapper_dir_len = wrapper_path.len;
-    std.fs.makeDirAbsolute(wrapper_path) catch return false;
+    std.Io.Dir.createDirAbsolute(io.get(), wrapper_path, .default_dir) catch return false;
 
     // Symlink the terminfo database as a sibling of the resources subdir
     if (std.fs.path.dirname(real)) |real_parent| {
         var ti_buf: [std.fs.max_path_bytes]u8 = undefined;
         if (std.fmt.bufPrint(&ti_buf, "{s}/terminfo", .{real_parent})) |ti_target| {
-            var pd = std.fs.openDirAbsolute(parent_path, .{}) catch return false;
-            defer pd.close();
-            pd.symLink(ti_target, "terminfo", .{ .is_directory = true }) catch |e| {
+            var pd = std.Io.Dir.openDirAbsolute(io.get(), parent_path, .{}) catch return false;
+            defer pd.close(io.get());
+            pd.symLink(io.get(), ti_target, "terminfo", .{ .is_directory = true }) catch |e| {
                 std.log.warn("ghostty_bridge: failed to symlink terminfo: {}", .{e});
             };
         } else |_| {}
     }
 
-    var wd = std.fs.openDirAbsolute(wrapper_path, .{}) catch return false;
-    defer wd.close();
+    var wd = std.Io.Dir.openDirAbsolute(io.get(), wrapper_path, .{}) catch return false;
+    defer wd.close(io.get());
 
     // Symlink all top-level entries except shell-integration and themes
     // (those are handled separately below)
     {
-        var rd = std.fs.openDirAbsolute(real, .{ .iterate = true }) catch return false;
-        defer rd.close();
+        var rd = std.Io.Dir.openDirAbsolute(io.get(), real, .{ .iterate = true }) catch return false;
+        defer rd.close(io.get());
         var it = rd.iterate();
-        while (it.next() catch null) |entry| {
+        while (it.next(io.get()) catch null) |entry| {
             if (std.mem.eql(u8, entry.name, "shell-integration")) continue;
             if (std.mem.eql(u8, entry.name, "themes")) continue;
             var tbuf: [std.fs.max_path_bytes]u8 = undefined;
             const target = std.fmt.bufPrint(&tbuf, "{s}/{s}", .{ real, entry.name }) catch continue;
-            wd.symLink(target, entry.name, .{ .is_directory = (entry.kind == .directory) }) catch |e| {
+            wd.symLink(io.get(), target, entry.name, .{ .is_directory = (entry.kind == .directory) }) catch |e| {
                 std.log.warn("ghostty_bridge: failed to symlink {s}: {}", .{ entry.name, e });
             };
         }
     }
 
     // Create shell-integration dirs for bash and zsh
-    wd.makePath("shell-integration/bash") catch return false;
-    wd.makePath("shell-integration/zsh") catch return false;
+    wd.createDirPath(io.get(), "shell-integration/bash") catch return false;
+    wd.createDirPath(io.get(), "shell-integration/zsh") catch return false;
 
     // Symlink all other shell-integration subdirs (elvish, fish, nushell, etc.)
     {
         var si_buf: [std.fs.max_path_bytes]u8 = undefined;
         const si_path = std.fmt.bufPrint(&si_buf, "{s}/shell-integration", .{real}) catch return false;
-        var sid = std.fs.openDirAbsolute(si_path, .{ .iterate = true }) catch return false;
-        defer sid.close();
-        var wsi = wd.openDir("shell-integration", .{}) catch return false;
-        defer wsi.close();
+        var sid = std.Io.Dir.openDirAbsolute(io.get(), si_path, .{ .iterate = true }) catch return false;
+        defer sid.close(io.get());
+        var wsi = wd.openDir(io.get(), "shell-integration", .{}) catch return false;
+        defer wsi.close(io.get());
         var it = sid.iterate();
-        while (it.next() catch null) |entry| {
+        while (it.next(io.get()) catch null) |entry| {
             if (std.mem.eql(u8, entry.name, "bash") or std.mem.eql(u8, entry.name, "zsh")) continue;
             var tbuf: [std.fs.max_path_bytes]u8 = undefined;
             const target = std.fmt.bufPrint(&tbuf, "{s}/{s}", .{ si_path, entry.name }) catch continue;
-            wsi.symLink(target, entry.name, .{ .is_directory = (entry.kind == .directory) }) catch |e| {
+            wsi.symLink(io.get(), target, entry.name, .{ .is_directory = (entry.kind == .directory) }) catch |e| {
                 std.log.warn("ghostty_bridge: failed to symlink shell-integration/{s}: {}", .{ entry.name, e });
             };
         }
@@ -226,10 +226,10 @@ fn createWrapperResourcesDir() bool {
 /// theme files from both seance's bundled set and ghostty's original resources.
 /// Seance themes are added first so they take precedence (duplicate names from
 /// ghostty are silently skipped).
-fn createMergedThemesDir(wd: std.fs.Dir, ghostty_resources: []const u8) void {
-    wd.makeDir("themes") catch return;
-    var themes_dir = wd.openDir("themes", .{}) catch return;
-    defer themes_dir.close();
+fn createMergedThemesDir(wd: std.Io.Dir, ghostty_resources: []const u8) void {
+    wd.createDir(io.get(), "themes", .default_dir) catch return;
+    var themes_dir = wd.openDir(io.get(), "themes", .{}) catch return;
+    defer themes_dir.close(io.get());
 
     // Seance's bundled themes first (highest precedence)
     if (seance_themes_dir_len > 0) {
@@ -245,28 +245,28 @@ fn createMergedThemesDir(wd: std.fs.Dir, ghostty_resources: []const u8) void {
 /// Symlink all theme files from source_path into themes_dir.
 /// Existing entries are silently skipped (allows higher-priority sources
 /// to take precedence).
-fn symlinkThemesFrom(themes_dir: std.fs.Dir, source_path: []const u8) void {
-    var source = std.fs.openDirAbsolute(source_path, .{ .iterate = true }) catch return;
-    defer source.close();
+fn symlinkThemesFrom(themes_dir: std.Io.Dir, source_path: []const u8) void {
+    var source = std.Io.Dir.openDirAbsolute(io.get(), source_path, .{ .iterate = true }) catch return;
+    defer source.close(io.get());
     var it = source.iterate();
-    while (it.next() catch null) |entry| {
+    while (it.next(io.get()) catch null) |entry| {
         if (entry.kind == .directory) continue;
         if (entry.name.len == 0 or entry.name[0] == '.') continue;
         var target_buf: [std.fs.max_path_bytes]u8 = undefined;
         const target = std.fmt.bufPrint(&target_buf, "{s}/{s}", .{ source_path, entry.name }) catch continue;
-        themes_dir.symLink(target, entry.name, .{}) catch |e| switch (e) {
+        themes_dir.symLink(io.get(), target, entry.name, .{}) catch |e| switch (e) {
             error.PathAlreadyExists => {},
             else => std.log.debug("ghostty_bridge: failed to symlink theme {s}: {}", .{ entry.name, e }),
         };
     }
 }
 
-fn writeShellWrapper(wd: std.fs.Dir, path: []const u8, real: []const u8, orig_suffix: []const u8, seance_suffix: []const u8) !void {
-    var f = try wd.createFile(path, .{});
-    defer f.close();
+fn writeShellWrapper(wd: std.Io.Dir, path: []const u8, real: []const u8, orig_suffix: []const u8, seance_suffix: []const u8) !void {
+    var f = try wd.createFile(io.get(), path, .{});
+    defer f.close(io.get());
     var buf: [2048]u8 = undefined;
     const content = std.fmt.bufPrint(&buf, "builtin source \"{s}{s}\"\n[[ -n \"$SEANCE_SHELL_INTEGRATION_DIR\" && -r \"$SEANCE_SHELL_INTEGRATION_DIR{s}\" ]] && builtin source \"$SEANCE_SHELL_INTEGRATION_DIR{s}\"\n", .{ real, orig_suffix, seance_suffix, seance_suffix }) catch return error.NoSpaceLeft;
-    try f.writeAll(content);
+    try f.writeStreamingAll(io.get(), content);
 }
 
 /// Remove the runtime wrapper resources directory.
@@ -276,7 +276,7 @@ pub fn cleanupResourcesWrapper() void {
     // wrapper_dir_buf is .../seance-resources-{pid}/ghostty — delete the
     // parent to clean up both the resources subdir and the terminfo symlink.
     if (std.fs.path.dirname(path)) |parent| {
-        std.fs.deleteTreeAbsolute(parent) catch {};
+        std.Io.Dir.cwd().deleteTree(io.get(), parent) catch {};
     }
     wrapper_dir_len = 0;
 }
@@ -605,34 +605,66 @@ fn handleAction(target: c.ghostty_target_s, action: c.ghostty_action_s) bool {
 
 /// Context passed through the GDK async clipboard read callback.
 const ClipboardReadCtx = struct {
-    pane: *Pane,
+    pane_id: u64,
     state: ?*anyopaque,
+    list_available: bool,
+
+    fn surface(self: *const ClipboardReadCtx) c.ghostty_surface_t {
+        // The pane may have closed while GDK was reading the clipboard.
+        const wm = @import("window.zig").window_manager orelse return null;
+        const window = wm.findByPaneId(self.pane_id) orelse return null;
+        for (window.workspaces.items) |ws| {
+            if (ws.findPaneById(self.pane_id)) |pane| return pane.surface;
+        }
+        return null;
+    }
 };
 
-/// Called by ghostty to read from the system clipboard.
+fn clipboardCompletion(clipboard: *c.GdkClipboard, list_available: bool) c.ghostty_clipboard_complete_s {
+    var result: c.ghostty_clipboard_complete_s = std.mem.zeroes(c.ghostty_clipboard_complete_s);
+    result.confirmed = true; // Preserve Séance's existing clipboard policy.
+    if (list_available) {
+        const formats = c.gdk_clipboard_get_formats(clipboard);
+        result.available = c.gdk_content_formats_get_mime_types(formats, &result.available_len);
+    }
+    return result;
+}
+
+/// Séance serves text from the standard and selection clipboards. The new
+/// embedding API negotiates MIME types and uses explicit content lengths.
 fn readClipboardCb(
     userdata: ?*anyopaque,
     clipboard_type: c.ghostty_clipboard_e,
     state: ?*anyopaque,
-) callconv(.c) bool {
-    const pane: *Pane = if (userdata) |ud| @ptrCast(@alignCast(ud)) else return false;
-
-    const display = c.gdk_display_get_default() orelse return false;
-    const clipboard = if (clipboard_type == c.GHOSTTY_CLIPBOARD_SELECTION)
+    mimes: [*c]const [*c]const u8,
+    mimes_len: usize,
+    list_available: bool,
+) callconv(.c) c.ghostty_clipboard_read_result_e {
+    const pane: *Pane = if (userdata) |ud| @ptrCast(@alignCast(ud)) else return c.GHOSTTY_CLIPBOARD_READ_UNAVAILABLE;
+    const surface = pane.surface orelse return c.GHOSTTY_CLIPBOARD_READ_UNAVAILABLE;
+    const display = c.gdk_display_get_default() orelse return c.GHOSTTY_CLIPBOARD_READ_UNAVAILABLE;
+    const clipboard = (if (clipboard_type == c.GHOSTTY_CLIPBOARD_SELECTION)
         c.gdk_display_get_primary_clipboard(display)
     else
-        c.gdk_display_get_clipboard(display);
-    if (clipboard == null) return false;
+        c.gdk_display_get_clipboard(display)) orelse return c.GHOSTTY_CLIPBOARD_READ_UNAVAILABLE;
 
-    // Allocate context to carry pane + opaque state through async callback
-    const ctx: *ClipboardReadCtx = @ptrCast(@alignCast(c.g_malloc(@sizeOf(ClipboardReadCtx)) orelse return false));
-    ctx.* = .{ .pane = pane, .state = state };
+    var wants_text = false;
+    for (mimes[0..mimes_len]) |mime| {
+        if (std.mem.eql(u8, std.mem.span(mime), "text/plain")) wants_text = true;
+    }
+    if (!wants_text) {
+        if (mimes_len != 0 or !list_available) return c.GHOSTTY_CLIPBOARD_READ_UNSUPPORTED;
+        const complete = clipboardCompletion(clipboard, true);
+        c.ghostty_surface_complete_clipboard_request(surface, &complete, state);
+        return c.GHOSTTY_CLIPBOARD_READ_STARTED;
+    }
 
+    const ctx: *ClipboardReadCtx = @ptrCast(@alignCast(c.g_malloc(@sizeOf(ClipboardReadCtx)) orelse return c.GHOSTTY_CLIPBOARD_READ_UNAVAILABLE));
+    ctx.* = .{ .pane_id = pane.id, .state = state, .list_available = list_available };
     c.gdk_clipboard_read_text_async(clipboard, null, onClipboardTextReady, @ptrCast(ctx));
-    return true;
+    return c.GHOSTTY_CLIPBOARD_READ_STARTED;
 }
 
-/// GDK async callback when clipboard text is ready.
 fn onClipboardTextReady(
     source_object: ?*c.GObject,
     res: ?*c.GAsyncResult,
@@ -640,67 +672,79 @@ fn onClipboardTextReady(
 ) callconv(.c) void {
     const ctx: *ClipboardReadCtx = @ptrCast(@alignCast(user_data));
     defer c.g_free(@ptrCast(ctx));
-
     const clipboard: *c.GdkClipboard = @ptrCast(source_object orelse return);
-    const text = c.gdk_clipboard_read_text_finish(clipboard, res, null) orelse return;
-    const surface = ctx.pane.surface orelse return;
-
-    c.ghostty_surface_complete_clipboard_request(
-        surface,
-        text,
-        ctx.state,
-        true,
-    );
+    const text = c.gdk_clipboard_read_text_finish(clipboard, res, null);
+    defer if (text != null) c.g_free(text);
+    const surface = ctx.surface() orelse return;
+    if (text == null) {
+        c.ghostty_surface_deny_clipboard_request(surface, ctx.state);
+        return;
+    }
+    const content: c.ghostty_clipboard_content_s = .{
+        .mime = "text/plain",
+        .data = text,
+        .len = std.mem.len(text),
+    };
+    var complete = clipboardCompletion(clipboard, ctx.list_available);
+    complete.contents = &content;
+    complete.contents_len = 1;
+    c.ghostty_surface_complete_clipboard_request(surface, &complete, ctx.state);
 }
 
-/// Called by ghostty to confirm a clipboard read (OSC 52).
-/// Auto-confirm: always allow programmatic clipboard access.
+/// Preserve the existing policy for programmatic clipboard access.
 fn confirmReadClipboardCb(
     userdata: ?*anyopaque,
-    text: [*c]const u8,
+    request_data: [*c]const c.ghostty_clipboard_confirm_s,
     state: ?*anyopaque,
     request: c.ghostty_clipboard_request_e,
 ) callconv(.c) void {
     _ = request;
     const pane: *Pane = if (userdata) |ud| @ptrCast(@alignCast(ud)) else return;
     const surface = pane.surface orelse return;
-
-    c.ghostty_surface_complete_clipboard_request(surface, text, state, true);
+    if (request_data == null) {
+        c.ghostty_surface_deny_clipboard_request(surface, state);
+        return;
+    }
+    const complete: c.ghostty_clipboard_complete_s = .{
+        .contents = request_data.*.contents,
+        .contents_len = request_data.*.contents_len,
+        .available = request_data.*.available,
+        .available_len = request_data.*.available_len,
+        .confirmed = true,
+        .remember = false,
+    };
+    c.ghostty_surface_complete_clipboard_request(surface, &complete, state);
 }
 
-/// Called by ghostty to write to the system clipboard.
 fn writeClipboardCb(
     userdata: ?*anyopaque,
     clipboard_type: c.ghostty_clipboard_e,
-    content: [*c]const c.ghostty_clipboard_content_s,
+    contents: [*c]const c.ghostty_clipboard_content_s,
     count: usize,
     confirm: bool,
 ) callconv(.c) void {
     _ = userdata;
     _ = confirm;
-    if (count == 0) return;
-
-    const display = c.gdk_display_get_default() orelse return;
-    const clipboard = if (clipboard_type == c.GHOSTTY_CLIPBOARD_SELECTION)
-        c.gdk_display_get_primary_clipboard(display)
-    else
-        c.gdk_display_get_clipboard(display);
-    if (clipboard == null) return;
-
-    // Use the first content entry's data as text
-    const text = content[0].data;
-    if (text != null) {
-        // Capture for programmatic reads (session scrollback export).
-        // writeScrollback() reads this instead of GDK clipboard because
-        // gdk_clipboard_get_content() returns null on Wayland during shutdown.
-        const span = std.mem.span(text);
-        if (span.len < captured_clipboard.len) {
-            @memcpy(captured_clipboard[0..span.len], span);
-            captured_clipboard[span.len] = 0;
-            captured_clipboard_len = span.len;
+    for (contents[0..count]) |content| {
+        if (content.data == null or content.mime == null) continue;
+        if (!std.mem.startsWith(u8, std.mem.span(content.mime), "text/plain")) continue;
+        const bytes = content.data[0..content.len];
+        // Capture export paths even during shutdown when GDK is unavailable.
+        if (bytes.len < captured_clipboard.len) {
+            @memcpy(captured_clipboard[0..bytes.len], bytes);
+            captured_clipboard[bytes.len] = 0;
+            captured_clipboard_len = bytes.len;
         }
-
+        const display = c.gdk_display_get_default() orelse return;
+        const clipboard = (if (clipboard_type == c.GHOSTTY_CLIPBOARD_SELECTION)
+            c.gdk_display_get_primary_clipboard(display)
+        else
+            c.gdk_display_get_clipboard(display)) orelse return;
+        // Ghostty's content is no longer required to be NUL terminated.
+        const text = c.g_strndup(content.data, content.len) orelse return;
+        defer c.g_free(text);
         c.gdk_clipboard_set_text(clipboard, text);
+        return;
     }
 }
 
@@ -734,12 +778,12 @@ fn applySeanceDefaults(config: *anyopaque) void {
     var tmp_path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const runtime_dir = config_mod.runtimeDir();
     const tmp_path = std.fmt.bufPrintZ(&tmp_path_buf, "{s}/seance-ghostty-defaults.tmp", .{runtime_dir}) catch return;
-    const file = std.fs.createFileAbsolute(tmp_path, .{}) catch return;
+    const file = std.Io.Dir.createFileAbsolute(io.get(), tmp_path, .{}) catch return;
     defer {
-        file.close();
-        std.fs.deleteFileAbsolute(tmp_path) catch {};
+        file.close(io.get());
+        std.Io.Dir.deleteFileAbsolute(io.get(), tmp_path) catch {};
     }
-    file.writeAll(defaults) catch return;
+    file.writeStreamingAll(io.get(), defaults) catch return;
     c.ghostty_config_load_file(@ptrCast(config), tmp_path);
 }
 
@@ -764,8 +808,8 @@ fn applySeanceConfig(config: *anyopaque) void {
 
     // Build config string
     var buf: [4096]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    const writer = fbs.writer();
+    var fbs = std.Io.Writer.fixed(&buf);
+    const writer = &fbs;
 
     // Font
     //
@@ -825,19 +869,19 @@ fn applySeanceConfig(config: *anyopaque) void {
         writer.print("window-padding-y = {d}\n", .{py}) catch {};
     }
 
-    const written = fbs.getWritten();
+    const written = fbs.buffered();
     if (written.len == 0) return;
 
     // Write to temp file and load
     var tmp_path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const runtime_dir = config_mod.runtimeDir();
     const tmp_path = std.fmt.bufPrintZ(&tmp_path_buf, "{s}/seance-ghostty-config.tmp", .{runtime_dir}) catch return;
-    const file = std.fs.createFileAbsolute(tmp_path, .{}) catch return;
+    const file = std.Io.Dir.createFileAbsolute(io.get(), tmp_path, .{}) catch return;
     defer {
-        file.close();
-        std.fs.deleteFileAbsolute(tmp_path) catch {};
+        file.close(io.get());
+        std.Io.Dir.deleteFileAbsolute(io.get(), tmp_path) catch {};
     }
-    file.writeAll(written) catch return;
+    file.writeStreamingAll(io.get(), written) catch return;
 
     // ghostty_config_load_file expects a [*:0]const u8
     c.ghostty_config_load_file(

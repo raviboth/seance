@@ -1,4 +1,5 @@
 const std = @import("std");
+const io = @import("io.zig");
 const c = @import("c.zig").c;
 const notification = @import("notification.zig");
 
@@ -138,7 +139,7 @@ pub const NotificationPanel = struct {
         c.gtk_widget_set_visible(self.scrolled, 1);
 
         // Add rows newest-first
-        const now = std.time.timestamp();
+        const now = io.timestamp();
         for (0..self.center.store.count) |i| {
             const notif = self.center.store.getByIndex(i) orelse continue;
             const row_widget = buildNotificationRow(notif, now, self);

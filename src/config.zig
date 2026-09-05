@@ -1,4 +1,5 @@
 const std = @import("std");
+const io = @import("io.zig");
 const ErrorBuf = @import("error_buf.zig").ErrorBuf;
 
 pub const SidebarPosition = enum { left, right };
@@ -91,17 +92,17 @@ pub fn clearLoadError() void {
 
 /// Return the seance config directory, respecting XDG_CONFIG_HOME.
 fn configDir(buf: []u8) ?[]const u8 {
-    if (std.posix.getenv("XDG_CONFIG_HOME")) |xdg| {
+    if (io.getenv("XDG_CONFIG_HOME")) |xdg| {
         return std.fmt.bufPrint(buf, "{s}/seance", .{xdg}) catch null;
     }
-    const home = std.posix.getenv("HOME") orelse return null;
+    const home = io.getenv("HOME") orelse return null;
     return std.fmt.bufPrint(buf, "{s}/.config/seance", .{home}) catch null;
 }
 
 /// Return the runtime directory for ephemeral files (sockets, scrollback replay, temp configs).
 /// Prefers XDG_RUNTIME_DIR, falls back to /tmp.
 pub fn runtimeDir() []const u8 {
-    return std.posix.getenv("XDG_RUNTIME_DIR") orelse "/tmp";
+    return io.getenv("XDG_RUNTIME_DIR") orelse "/tmp";
 }
 
 pub fn load() Config {
@@ -110,7 +111,7 @@ pub fn load() Config {
 
     var dir_buf: [std.fs.max_path_bytes]u8 = undefined;
     const dir = configDir(&dir_buf) orelse {
-        const home = std.posix.getenv("HOME") orelse {
+        const home = io.getenv("HOME") orelse {
             std.log.warn("config: HOME not set, using defaults", .{});
             global = config;
             return config;
@@ -128,19 +129,19 @@ pub fn load() Config {
         return config;
     };
 
-    const file = std.fs.openFileAbsolute(path, .{}) catch |e| {
+    const file = std.Io.Dir.openFileAbsolute(io.get(), path, .{}) catch |e| {
         if (e != error.FileNotFound) {
             std.log.err("config: failed to open {s}: {s}", .{ path, @errorName(e) });
             load_error.set("Could not open config.toml: {s}", .{@errorName(e)});
         }
         // Fallback to Ghostty config
-        if (std.posix.getenv("HOME")) |home| loadGhosttyConfig(&config, home);
+        if (io.getenv("HOME")) |home| loadGhosttyConfig(&config, home);
         global = config;
         return config;
     };
-    defer file.close();
+    defer file.close(io.get());
 
-    const stat = file.stat() catch |e| {
+    const stat = file.stat(io.get()) catch |e| {
         std.log.err("config: stat failed on config.toml: {s}", .{@errorName(e)});
         load_error.set("Could not read config.toml: {s}", .{@errorName(e)});
         global = config;
@@ -151,7 +152,7 @@ pub fn load() Config {
         // Fallback to fixed buffer for small configs
         std.log.warn("config: allocation failed for {d} bytes, using fixed buffer", .{file_size});
         var buf: [8192]u8 = undefined;
-        const n = file.readAll(&buf) catch |e| {
+        const n = io.readAll(file, &buf) catch |e| {
             std.log.err("config: readAll failed: {s}", .{@errorName(e)});
             load_error.set("Could not read config.toml: {s}", .{@errorName(e)});
             global = config;
@@ -162,7 +163,7 @@ pub fn load() Config {
         return config;
     };
     defer std.heap.page_allocator.free(alloc_buf);
-    const n = file.readAll(alloc_buf) catch |e| {
+    const n = io.readAll(file, alloc_buf) catch |e| {
         std.log.err("config: readAll failed: {s}", .{@errorName(e)});
         load_error.set("Could not read config.toml: {s}", .{@errorName(e)});
         global = config;
@@ -192,7 +193,7 @@ pub fn saveConfig(cfg: *const Config) void {
         std.log.warn("config: cannot save — config dir unavailable", .{});
         return;
     };
-    std.fs.cwd().makePath(dir_path) catch |e| {
+    std.Io.Dir.cwd().createDirPath(io.get(), dir_path) catch |e| {
         std.log.warn("config: failed to create config dir: {s}", .{@errorName(e)});
         return;
     };
@@ -210,15 +211,15 @@ pub fn saveConfig(cfg: *const Config) void {
         return;
     };
 
-    const file = std.fs.createFileAbsolute(tmp_path, .{}) catch |e| {
+    const file = std.Io.Dir.createFileAbsolute(io.get(), tmp_path, .{}) catch |e| {
         std.log.warn("config: cannot create temp file for save: {s}", .{@errorName(e)});
         return;
     };
-    defer file.close();
+    defer file.close(io.get());
 
     var buf: [16384]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    const w = fbs.writer();
+    var fbs = std.Io.Writer.fixed(&buf);
+    const w = &fbs;
 
     // [font]
     w.print("[font]\n", .{}) catch return;
@@ -291,13 +292,13 @@ pub fn saveConfig(cfg: *const Config) void {
     const keybinds_mod = @import("keybinds.zig");
     keybinds_mod.writeKeybinds(w) catch return;
 
-    file.writeAll(fbs.getWritten()) catch |e| {
+    file.writeStreamingAll(io.get(), fbs.buffered()) catch |e| {
         std.log.warn("config: failed to write config file: {s}", .{@errorName(e)});
         return;
     };
 
     // Atomic rename: tmp → final. If we crash before this, the old config is intact.
-    std.fs.renameAbsolute(tmp_path, file_path) catch |e| {
+    std.Io.Dir.renameAbsolute(tmp_path, file_path, io.get()) catch |e| {
         std.log.warn("config: atomic rename failed: {s}", .{@errorName(e)});
     };
 }
@@ -376,24 +377,30 @@ fn applyValue(config: *Config, section: []const u8, key: []const u8, raw_val: []
 
     if (eql(section, "font")) {
         if (eql(key, "family")) {
-            setStr(&config.font_family, &config.font_family_len, val); return true;
+            setStr(&config.font_family, &config.font_family_len, val);
+            return true;
         } else if (eql(key, "size")) {
             if (parseFloat(val)) |f| config.font_size = f;
             return true;
         }
     } else if (eql(section, "colors")) {
         if (eql(key, "theme")) {
-            setStr(&config.theme, &config.theme_len, val); return true;
+            setStr(&config.theme, &config.theme_len, val);
+            return true;
         } else if (eql(key, "background-opacity")) {
-            config.background_opacity = parseFloat(val) orelse config.background_opacity; return true;
+            config.background_opacity = parseFloat(val) orelse config.background_opacity;
+            return true;
         } else if (eql(key, "dim-unfocused-panes")) {
-            config.dim_unfocused_panes = parseBool(val) orelse config.dim_unfocused_panes; return true;
+            config.dim_unfocused_panes = parseBool(val) orelse config.dim_unfocused_panes;
+            return true;
         }
     } else if (eql(section, "window")) {
         if (eql(key, "padding-x")) {
-            config.window_padding_x = parseU32(val) orelse config.window_padding_x; return true;
+            config.window_padding_x = parseU32(val) orelse config.window_padding_x;
+            return true;
         } else if (eql(key, "padding-y")) {
-            config.window_padding_y = parseU32(val) orelse config.window_padding_y; return true;
+            config.window_padding_y = parseU32(val) orelse config.window_padding_y;
+            return true;
         } else if (eql(key, "decoration-mode")) {
             config.decoration_mode = if (eql(val, "csd"))
                 .csd
@@ -405,27 +412,37 @@ fn applyValue(config: *Config, section: []const u8, key: []const u8, raw_val: []
         }
     } else if (eql(section, "sidebar")) {
         if (eql(key, "position")) {
-            config.sidebar_position = if (eql(val, "right")) .right else .left; return true;
+            config.sidebar_position = if (eql(val, "right")) .right else .left;
+            return true;
         } else if (eql(key, "width")) {
-            config.sidebar_width = parseU32(val) orelse config.sidebar_width; return true;
+            config.sidebar_width = parseU32(val) orelse config.sidebar_width;
+            return true;
         } else if (eql(key, "visible")) {
-            config.sidebar_visible = parseBool(val) orelse config.sidebar_visible; return true;
+            config.sidebar_visible = parseBool(val) orelse config.sidebar_visible;
+            return true;
         } else if (eql(key, "show-notification-text")) {
-            config.sidebar_show_notification_text = parseBool(val) orelse config.sidebar_show_notification_text; return true;
+            config.sidebar_show_notification_text = parseBool(val) orelse config.sidebar_show_notification_text;
+            return true;
         } else if (eql(key, "show-status")) {
-            config.sidebar_show_status = parseBool(val) orelse config.sidebar_show_status; return true;
+            config.sidebar_show_status = parseBool(val) orelse config.sidebar_show_status;
+            return true;
         } else if (eql(key, "show-logs")) {
-            config.sidebar_show_logs = parseBool(val) orelse config.sidebar_show_logs; return true;
+            config.sidebar_show_logs = parseBool(val) orelse config.sidebar_show_logs;
+            return true;
         } else if (eql(key, "show-progress")) {
-            config.sidebar_show_progress = parseBool(val) orelse config.sidebar_show_progress; return true;
+            config.sidebar_show_progress = parseBool(val) orelse config.sidebar_show_progress;
+            return true;
         } else if (eql(key, "show-branch")) {
-            config.sidebar_show_branch = parseBool(val) orelse config.sidebar_show_branch; return true;
+            config.sidebar_show_branch = parseBool(val) orelse config.sidebar_show_branch;
+            return true;
         } else if (eql(key, "show-ports")) {
-            config.sidebar_show_ports = parseBool(val) orelse config.sidebar_show_ports; return true;
+            config.sidebar_show_ports = parseBool(val) orelse config.sidebar_show_ports;
+            return true;
         }
     } else if (eql(section, "terminal")) {
         if (eql(key, "scrollback-lines")) {
-            config.scrollback_lines = parseU32(val) orelse config.scrollback_lines; return true;
+            config.scrollback_lines = parseU32(val) orelse config.scrollback_lines;
+            return true;
         } else if (eql(key, "cursor-shape")) {
             config.cursor_shape = if (eql(val, "ibeam"))
                 .ibeam
@@ -435,35 +452,47 @@ fn applyValue(config: *Config, section: []const u8, key: []const u8, raw_val: []
                 .block;
             return true;
         } else if (eql(key, "cursor-blink")) {
-            config.cursor_blink = parseBool(val) orelse config.cursor_blink; return true;
+            config.cursor_blink = parseBool(val) orelse config.cursor_blink;
+            return true;
         }
     } else if (eql(section, "behavior")) {
         if (eql(key, "bell-notification")) {
-            config.bell_notification = parseBool(val) orelse config.bell_notification; return true;
+            config.bell_notification = parseBool(val) orelse config.bell_notification;
+            return true;
         } else if (eql(key, "desktop-notifications")) {
-            config.desktop_notifications = parseBool(val) orelse config.desktop_notifications; return true;
+            config.desktop_notifications = parseBool(val) orelse config.desktop_notifications;
+            return true;
         } else if (eql(key, "focus-follows-mouse")) {
-            config.focus_follows_mouse = parseBool(val) orelse config.focus_follows_mouse; return true;
+            config.focus_follows_mouse = parseBool(val) orelse config.focus_follows_mouse;
+            return true;
         } else if (eql(key, "confirm-close-window")) {
-            config.confirm_close_window = parseBool(val) orelse config.confirm_close_window; return true;
+            config.confirm_close_window = parseBool(val) orelse config.confirm_close_window;
+            return true;
         } else if (eql(key, "claude-code-hooks")) {
-            config.claude_code_hooks = parseBool(val) orelse config.claude_code_hooks; return true;
+            config.claude_code_hooks = parseBool(val) orelse config.claude_code_hooks;
+            return true;
         } else if (eql(key, "codex-hooks")) {
-            config.codex_hooks = parseBool(val) orelse config.codex_hooks; return true;
+            config.codex_hooks = parseBool(val) orelse config.codex_hooks;
+            return true;
         } else if (eql(key, "pi-hooks")) {
-            config.pi_hooks = parseBool(val) orelse config.pi_hooks; return true;
+            config.pi_hooks = parseBool(val) orelse config.pi_hooks;
+            return true;
         }
     } else if (eql(section, "notifications")) {
         if (eql(key, "sound")) {
-            config.notification_sound = parseNotificationSound(val); return true;
+            config.notification_sound = parseNotificationSound(val);
+            return true;
         }
     } else if (eql(section, "socket")) {
         if (eql(key, "path")) {
-            setStr(&config.socket_path, &config.socket_path_len, val); return true;
+            setStr(&config.socket_path, &config.socket_path_len, val);
+            return true;
         } else if (eql(key, "port-base")) {
-            config.port_base = parseU32(val) orelse config.port_base; return true;
+            config.port_base = parseU32(val) orelse config.port_base;
+            return true;
         } else if (eql(key, "port-range")) {
-            config.port_range = parseU32(val) orelse config.port_range; return true;
+            config.port_range = parseU32(val) orelse config.port_range;
+            return true;
         }
     } else if (eql(section, "keybinds")) {
         const keybinds = @import("keybinds.zig");
@@ -477,11 +506,11 @@ fn loadGhosttyConfig(config: *Config, home: []const u8) void {
     var path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const path = std.fmt.bufPrint(&path_buf, "{s}/.config/ghostty/config", .{home}) catch return;
 
-    const file = std.fs.openFileAbsolute(path, .{}) catch return;
-    defer file.close();
+    const file = std.Io.Dir.openFileAbsolute(io.get(), path, .{}) catch return;
+    defer file.close(io.get());
 
     var buf: [8192]u8 = undefined;
-    const n = file.readAll(&buf) catch return;
+    const n = io.readAll(file, &buf) catch return;
     const content = buf[0..n];
 
     var lines = std.mem.splitScalar(u8, content, '\n');
@@ -714,22 +743,22 @@ test "parseFloat: valid and invalid" {
 
 test "writeFloat: positive, zero, and negative values" {
     var buf: [64]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.Writer.fixed(&buf);
 
-    writeFloat(fbs.writer(), 13.0) catch unreachable;
-    try std.testing.expectEqualStrings("13.00", fbs.getWritten());
+    writeFloat(&fbs, 13.0) catch unreachable;
+    try std.testing.expectEqualStrings("13.00", fbs.buffered());
 
-    fbs.reset();
-    writeFloat(fbs.writer(), 0.85) catch unreachable;
-    try std.testing.expectEqualStrings("0.85", fbs.getWritten());
+    fbs.end = 0;
+    writeFloat(&fbs, 0.85) catch unreachable;
+    try std.testing.expectEqualStrings("0.85", fbs.buffered());
 
-    fbs.reset();
-    writeFloat(fbs.writer(), 0.0) catch unreachable;
-    try std.testing.expectEqualStrings("0.00", fbs.getWritten());
+    fbs.end = 0;
+    writeFloat(&fbs, 0.0) catch unreachable;
+    try std.testing.expectEqualStrings("0.00", fbs.buffered());
 
-    fbs.reset();
-    writeFloat(fbs.writer(), -1.5) catch unreachable;
-    try std.testing.expectEqualStrings("-1.50", fbs.getWritten());
+    fbs.end = 0;
+    writeFloat(&fbs, -1.5) catch unreachable;
+    try std.testing.expectEqualStrings("-1.50", fbs.buffered());
 }
 
 test "setStr: normal copy" {
@@ -766,4 +795,3 @@ test "parseToml: sidebar boolean toggles" {
     try std.testing.expectEqual(false, cfg.sidebar_show_branch);
     try std.testing.expectEqual(false, cfg.sidebar_show_ports);
 }
-

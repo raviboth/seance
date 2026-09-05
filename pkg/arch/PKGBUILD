@@ -31,9 +31,11 @@ makedepends=(
 
 options=(!debug)
 
-# Séance and its bundled ghostty submodule pin minimum_zig_version 0.15.2 and
-# do not build with Zig 0.16+. Arch's 'zig' package tracks the latest release,
-# so vendor the exact toolchain instead of depending on whatever is current.
+# The published 0.1.4 source tarball still requires Zig 0.15.2. Keep its
+# toolchain matched to that release. Development sources now use Zig 0.16;
+# when publishing their source release, replace this vendored compiler with
+# makedepends=('zig>=0.16.0' 'zig<0.17.0' 'ncurses' 'pkg-config'), fetch via
+# `zig build --fetch`, and build with --system "$srcdir/$pkgname-$pkgver/zig-pkg".
 _zigver=0.15.2
 
 source=(

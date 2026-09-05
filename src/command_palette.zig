@@ -1,4 +1,5 @@
 const std = @import("std");
+const io = @import("io.zig");
 const c = @import("c.zig").c;
 const Window = @import("window.zig");
 const keybinds = @import("keybinds.zig");
@@ -1420,7 +1421,7 @@ fn onOverlayClick(
 
 /// Check if a binary exists on $PATH using access(2).
 fn detectBinary(binary: []const u8) bool {
-    const path_env = std.posix.getenv("PATH") orelse return false;
+    const path_env = io.getenv("PATH") orelse return false;
     var iter = std.mem.splitScalar(u8, path_env, ':');
     while (iter.next()) |dir| {
         if (dir.len == 0) continue;
@@ -1431,7 +1432,7 @@ fn detectBinary(binary: []const u8) bool {
         @memcpy(buf[dir.len + 1 ..][0..binary.len], binary);
         buf[dir.len + 1 + binary.len] = 0;
         const path_z: [*:0]const u8 = @ptrCast(&buf);
-        std.posix.accessZ(path_z, std.posix.X_OK) catch continue;
+        @import("posix.zig").accessZ(path_z, std.c.X_OK) catch continue;
         return true;
     }
     return false;

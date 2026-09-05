@@ -1523,7 +1523,7 @@ pub const Workspace = struct {
     }
 
     pub fn basenameFromPath(path: []const u8) []const u8 {
-        const trimmed = std.mem.trimRight(u8, path, "/");
+        const trimmed = std.mem.trimEnd(u8, path, "/");
         if (trimmed.len == 0) return "Terminal";
         if (std.mem.lastIndexOfScalar(u8, trimmed, '/')) |pos| {
             return trimmed[pos + 1 ..];
@@ -1645,7 +1645,8 @@ pub const Workspace = struct {
         var cwd_buf: [Pane.cwd_cap + 1]u8 = undefined;
         const cwd_z: ?[*:0]const u8 = if (self.focusedGroup()) |grp|
             if (grp.focusedTerminalPane()) |pane| pane.cwdZ(&cwd_buf) else null
-        else null;
+        else
+            null;
 
         if (self.focusedGroup()) |old_grp| old_grp.unfocus();
         const grp = try self.addColumn(cwd_z);
@@ -2181,7 +2182,8 @@ pub const Workspace = struct {
         var cwd_buf: [Pane.cwd_cap + 1]u8 = undefined;
         const cwd_z: ?[*:0]const u8 = if (group.focusedTerminalPane()) |pane|
             pane.cwdZ(&cwd_buf)
-        else null;
+        else
+            null;
 
         _ = try group.newPanel(cwd_z);
         // Trigger layout update for stacked mode

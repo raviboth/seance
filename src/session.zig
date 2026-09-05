@@ -1,4 +1,5 @@
 const std = @import("std");
+const io = @import("io.zig");
 const c = @import("c.zig").c;
 const ErrorBuf = @import("error_buf.zig").ErrorBuf;
 const Pane = @import("pane.zig").Pane;
@@ -23,7 +24,7 @@ pub fn clearLoadError() void {
 }
 
 pub fn getSessionPath(buf: []u8) ?[]const u8 {
-    const home = std.posix.getenv("HOME") orelse return null;
+    const home = io.getenv("HOME") orelse return null;
     return std.fmt.bufPrint(buf, "{s}/.config/seance/session.json", .{home}) catch null;
 }
 
@@ -47,28 +48,30 @@ pub fn saveAll(wm: anytype, include_scrollback: bool) void {
 
     // Ensure directory exists
     if (std.fs.path.dirname(path)) |dir| {
-        std.fs.cwd().makePath(dir) catch |e| {
+        std.Io.Dir.cwd().createDirPath(io.get(), dir) catch |e| {
             std.log.warn("session: failed to create session dir: {s}", .{@errorName(e)});
         };
     }
 
-    const file = std.fs.cwd().createFile(path, .{}) catch |e| {
+    const file = std.Io.Dir.cwd().createFile(io.get(), path, .{}) catch |e| {
         std.log.warn("session: failed to create session file: {s}", .{@errorName(e)});
         return;
     };
-    file.writeAll(json_buf.items) catch |e| {
+    file.writeStreamingAll(io.get(), json_buf.items) catch |e| {
         std.log.warn("session: failed to write session file: {s}", .{@errorName(e)});
-        file.close();
+        file.close(io.get());
         return;
     };
-    file.close();
+    file.close(io.get());
 }
 
 fn writeMultiWindowJson(buf: *std.ArrayList(u8), alloc: Allocator, wm: anytype, include_scrollback: bool) !void {
-    const w = buf.writer(alloc);
+    var output: std.Io.Writer.Allocating = .fromArrayList(alloc, buf);
+    defer buf.* = output.toArrayList();
+    const w = &output.writer;
     try w.writeAll("{");
     try writeKvInt(w, "version", SESSION_VERSION, true);
-    try writeKvInt(w, "created_at", @intCast(std.time.timestamp()), false);
+    try writeKvInt(w, "created_at", @intCast(io.timestamp()), false);
     try w.writeAll(",\"windows\":[");
 
     for (wm.windows.items, 0..) |state, i| {
@@ -144,7 +147,7 @@ fn writeKvFloat(w: anytype, key: []const u8, val: f64, first: bool) !void {
     try w.writeByte('"');
     try w.writeAll(key);
     try w.writeAll("\":");
-    try std.fmt.format(w, "{d:.4}", .{val});
+    try w.print("{d:.4}", .{val});
 }
 
 fn writeGroup(w: anytype, grp: *PaneGroup, include_scrollback: bool) !void {
@@ -213,13 +216,13 @@ fn writeScrollback(w: anytype, pane: *Pane) !void {
     }
 
     // Read the VT-formatted scrollback content from the temp file
-    const file = std.fs.openFileAbsolute(file_path, .{}) catch {
+    const file = std.Io.Dir.openFileAbsolute(io.get(), file_path, .{}) catch {
         try writeKvNull(w, "scrollback", false);
         return;
     };
     defer {
-        file.close();
-        std.fs.deleteFileAbsolute(file_path) catch {};
+        file.close(io.get());
+        std.Io.Dir.deleteFileAbsolute(io.get(), file_path) catch {};
     }
 
     const max_read = MAX_SCROLLBACK_CHARS + 64 * 1024;
@@ -228,7 +231,7 @@ fn writeScrollback(w: anytype, pane: *Pane) !void {
         return;
     };
     defer std.heap.page_allocator.free(read_buf);
-    const n = file.readAll(read_buf) catch {
+    const n = io.readAll(file, read_buf) catch {
         try writeKvNull(w, "scrollback", false);
         return;
     };
@@ -331,7 +334,7 @@ fn ensureReplayDir() ?[]const u8 {
 
     replay_dir_path_len = len.len;
 
-    std.fs.cwd().makePath(len) catch return null;
+    std.Io.Dir.cwd().createDirPath(io.get(), len) catch return null;
     return len;
 }
 
@@ -351,28 +354,28 @@ fn setScrollbackOnPane(pane: *Pane, scrollback: []const u8) void {
     var file_path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const file_path = std.fmt.bufPrint(&file_path_buf, "{s}/pane-{d}.txt", .{ dir_path, replay_file_counter }) catch return;
 
-    const file = std.fs.cwd().createFile(file_path, .{}) catch |e| {
+    const file = std.Io.Dir.cwd().createFile(io.get(), file_path, .{}) catch |e| {
         std.log.warn("session: failed to create scrollback replay file: {s}", .{@errorName(e)});
         return;
     };
     // Wrap with SGR resets: leading reset clears partial style state from
     // truncation, trailing reset prevents scrollback styles leaking into prompt.
-    file.writeAll("\x1b[0m") catch |e| {
+    file.writeStreamingAll(io.get(), "\x1b[0m") catch |e| {
         std.log.warn("session: failed to write scrollback replay data: {s}", .{@errorName(e)});
-        file.close();
+        file.close(io.get());
         return;
     };
-    file.writeAll(data) catch |e| {
+    file.writeStreamingAll(io.get(), data) catch |e| {
         std.log.warn("session: failed to write scrollback replay data: {s}", .{@errorName(e)});
-        file.close();
+        file.close(io.get());
         return;
     };
-    file.writeAll("\x1b[0m") catch |e| {
+    file.writeStreamingAll(io.get(), "\x1b[0m") catch |e| {
         std.log.warn("session: failed to write scrollback replay data: {s}", .{@errorName(e)});
-        file.close();
+        file.close(io.get());
         return;
     };
-    file.close();
+    file.close(io.get());
 
     if (file_path.len >= pane.replay_scrollback_path.len) return;
     @memcpy(pane.replay_scrollback_path[0..file_path.len], file_path);
@@ -384,13 +387,13 @@ pub fn cleanupReplayDir() void {
     if (replay_dir_path_len == 0) return;
     const path = replay_dir_path[0..replay_dir_path_len];
 
-    var dir = std.fs.cwd().openDir(path, .{ .iterate = true }) catch return;
-    defer dir.close();
+    var dir = std.Io.Dir.cwd().openDir(io.get(), path, .{ .iterate = true }) catch return;
+    defer dir.close(io.get());
     var iter = dir.iterate();
-    while (iter.next() catch null) |entry| {
-        dir.deleteFile(entry.name) catch {};
+    while (iter.next(io.get()) catch null) |entry| {
+        dir.deleteFile(io.get(), entry.name) catch {};
     }
-    std.fs.cwd().deleteDir(path) catch {};
+    std.Io.Dir.cwd().deleteDir(io.get(), path) catch {};
     replay_dir_path_len = 0;
 }
 
@@ -401,16 +404,16 @@ pub fn cleanupStaleReplayDirs() void {
     const config_mod = @import("config.zig");
     const parent_dir_path = config_mod.runtimeDir();
 
-    var dir = std.fs.cwd().openDir(parent_dir_path, .{ .iterate = true }) catch return;
-    defer dir.close();
+    var dir = std.Io.Dir.cwd().openDir(io.get(), parent_dir_path, .{ .iterate = true }) catch return;
+    defer dir.close(io.get());
     var iter = dir.iterate();
-    while (iter.next() catch null) |entry| {
+    while (iter.next(io.get()) catch null) |entry| {
         if (std.mem.startsWith(u8, entry.name, "seance-scrollback-")) {
             const pid_str = entry.name["seance-scrollback-".len..];
             const pid = std.fmt.parseInt(i32, pid_str, 10) catch continue;
             // kill(pid, 0) returns 0 if process exists; returns negative errno otherwise.
             // ESRCH (-3) means no such process. EPERM means it exists but we can't signal it.
-            std.posix.kill(pid, 0) catch |err| switch (err) {
+            std.posix.kill(pid, @enumFromInt(0)) catch |err| switch (err) {
                 error.ProcessNotFound => removeReplayDirEntries(dir, entry.name),
                 else => {},
             };
@@ -418,14 +421,14 @@ pub fn cleanupStaleReplayDirs() void {
     }
 }
 
-fn removeReplayDirEntries(parent: std.fs.Dir, name: []const u8) void {
-    var stale_dir = parent.openDir(name, .{ .iterate = true }) catch return;
-    defer stale_dir.close();
+fn removeReplayDirEntries(parent: std.Io.Dir, name: []const u8) void {
+    var stale_dir = parent.openDir(io.get(), name, .{ .iterate = true }) catch return;
+    defer stale_dir.close(io.get());
     var stale_iter = stale_dir.iterate();
-    while (stale_iter.next() catch null) |f| {
-        stale_dir.deleteFile(f.name) catch {};
+    while (stale_iter.next(io.get()) catch null) |f| {
+        stale_dir.deleteFile(io.get(), f.name) catch {};
     }
-    parent.deleteDir(name) catch {};
+    parent.deleteDir(io.get(), name) catch {};
 }
 
 // ── JSON helpers ──────────────────────────────────────────────────────
@@ -444,7 +447,7 @@ fn writeKvInt(w: anytype, key: []const u8, val: i64, first: bool) !void {
     try w.writeByte('"');
     try w.writeAll(key);
     try w.writeAll("\":");
-    try std.fmt.format(w, "{d}", .{val});
+    try w.print("{d}", .{val});
 }
 
 fn writeKvBool(w: anytype, key: []const u8, val: bool, first: bool) !void {
@@ -472,7 +475,7 @@ fn writeJsonEscaped(w: anytype, s: []const u8) !void {
             '\t' => try w.writeAll("\\t"),
             else => {
                 if (ch < 0x20) {
-                    try std.fmt.format(w, "\\u{x:0>4}", .{ch});
+                    try w.print("\\u{x:0>4}", .{ch});
                 } else {
                     try w.writeByte(ch);
                 }
@@ -487,7 +490,7 @@ const WindowState = @import("window.zig").WindowState;
 const Window = @import("window.zig");
 
 pub fn shouldRestore() bool {
-    if (std.posix.getenv("SEANCE_DISABLE_SESSION_RESTORE")) |_| return false;
+    if (io.getenv("SEANCE_DISABLE_SESSION_RESTORE")) |_| return false;
     return true;
 }
 
@@ -503,7 +506,7 @@ pub fn loadAndRestoreAll(wm: anytype) bool {
     };
 
     const alloc = wm.allocator;
-    const data = std.fs.cwd().readFileAlloc(alloc, path, 10 * 1024 * 1024) catch |e| {
+    const data = std.Io.Dir.cwd().readFileAlloc(io.get(), path, alloc, .limited(10 * 1024 * 1024)) catch |e| {
         if (e != error.FileNotFound) {
             std.log.err("session: failed to read session file: {s}", .{@errorName(e)});
             load_error.set("Could not read session file: {s}", .{@errorName(e)});
@@ -1161,30 +1164,30 @@ test "ansiSafeTruncationStart: newline before ESC stops fallback scan" {
 
 test "writeJsonEscaped: normal text passthrough" {
     var buf: [256]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    try writeJsonEscaped(fbs.writer(), "hello world");
-    try testing.expectEqualStrings("hello world", fbs.getWritten());
+    var fbs = std.Io.Writer.fixed(&buf);
+    try writeJsonEscaped(&fbs, "hello world");
+    try testing.expectEqualStrings("hello world", fbs.buffered());
 }
 
 test "writeJsonEscaped: quotes and backslashes" {
     var buf: [256]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    try writeJsonEscaped(fbs.writer(), "say \"hello\" \\ there");
-    try testing.expectEqualStrings("say \\\"hello\\\" \\\\ there", fbs.getWritten());
+    var fbs = std.Io.Writer.fixed(&buf);
+    try writeJsonEscaped(&fbs, "say \"hello\" \\ there");
+    try testing.expectEqualStrings("say \\\"hello\\\" \\\\ there", fbs.buffered());
 }
 
 test "writeJsonEscaped: named control characters" {
     var buf: [256]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    try writeJsonEscaped(fbs.writer(), "a\nb\tc\rd");
-    try testing.expectEqualStrings("a\\nb\\tc\\rd", fbs.getWritten());
+    var fbs = std.Io.Writer.fixed(&buf);
+    try writeJsonEscaped(&fbs, "a\nb\tc\rd");
+    try testing.expectEqualStrings("a\\nb\\tc\\rd", fbs.buffered());
 }
 
 test "writeJsonEscaped: other control characters use unicode escape" {
     var buf: [256]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    try writeJsonEscaped(fbs.writer(), "\x01\x1f");
-    try testing.expectEqualStrings("\\u0001\\u001f", fbs.getWritten());
+    var fbs = std.Io.Writer.fixed(&buf);
+    try writeJsonEscaped(&fbs, "\x01\x1f");
+    try testing.expectEqualStrings("\\u0001\\u001f", fbs.buffered());
 }
 
 test "writeJsonEscaped: round trip with JSON parser" {
@@ -1192,13 +1195,13 @@ test "writeJsonEscaped: round trip with JSON parser" {
     const original = "line1\nline2\ttab\r\n\"quoted\" and \\backslash\x01";
 
     var buf: [1024]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    const w = fbs.writer();
+    var fbs = std.Io.Writer.fixed(&buf);
+    const w = &fbs;
     try w.writeByte('"');
     try writeJsonEscaped(w, original);
     try w.writeByte('"');
 
-    const json_str = fbs.getWritten();
+    const json_str = fbs.buffered();
     const parsed = try std.json.parseFromSlice(std.json.Value, alloc, json_str, .{});
     defer parsed.deinit();
 
@@ -1210,7 +1213,7 @@ test "writeJsonEscaped: round trip with JSON parser" {
 
 test "writeJsonEscaped: NUL character" {
     var buf: [64]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    try writeJsonEscaped(fbs.writer(), "\x00");
-    try testing.expectEqualStrings("\\u0000", fbs.getWritten());
+    var fbs = std.Io.Writer.fixed(&buf);
+    try writeJsonEscaped(&fbs, "\x00");
+    try testing.expectEqualStrings("\\u0000", fbs.buffered());
 }

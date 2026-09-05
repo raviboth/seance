@@ -1,4 +1,5 @@
 const std = @import("std");
+const io = @import("io.zig");
 const builtin = @import("builtin");
 const c = @import("c.zig").c;
 const Window = @import("window.zig");
@@ -93,9 +94,9 @@ fn onActivate(app: *c.AdwApplication) callconv(.c) void {
             _ = manager.newWindow();
         }
         // Register UNIX signal handlers for graceful shutdown
-        _ = c.g_unix_signal_add(std.posix.SIG.TERM, &onUnixSignal, @ptrCast(@alignCast(app)));
-        _ = c.g_unix_signal_add(std.posix.SIG.INT, &onUnixSignal, @ptrCast(@alignCast(app)));
-        _ = c.g_unix_signal_add(std.posix.SIG.HUP, &onUnixSignal, @ptrCast(@alignCast(app)));
+        _ = c.g_unix_signal_add(@intFromEnum(std.posix.SIG.TERM), &onUnixSignal, @ptrCast(@alignCast(app)));
+        _ = c.g_unix_signal_add(@intFromEnum(std.posix.SIG.INT), &onUnixSignal, @ptrCast(@alignCast(app)));
+        _ = c.g_unix_signal_add(@intFromEnum(std.posix.SIG.HUP), &onUnixSignal, @ptrCast(@alignCast(app)));
     } else {
         // Subsequent activation (e.g., second instance): new window
         _ = wm.?.newWindow();
@@ -129,7 +130,7 @@ fn onShutdown(_: *c.AdwApplication) callconv(.c) void {
 
     // Force-exit — ghostty's thread joins deadlock on Linux because the
     // renderer thread requires the main thread (must_draw_from_app_thread).
-    std.posix.exit(0);
+    std.process.exit(0);
 }
 
 fn onUnixSignal(data: c.gpointer) callconv(.c) c.gboolean {
@@ -140,7 +141,7 @@ fn onUnixSignal(data: c.gpointer) callconv(.c) c.gboolean {
 fn registerBundledIcons() void {
     // Resolve exe path via /proc/self/exe, then derive <prefix>/share/icons.
     var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const exe_path = std.fs.selfExePath(&buf) catch return;
+    const exe_path = io.executablePath(&buf) catch return;
     // exe_path is e.g. "/path/to/zig-out/bin/seance"
     // We need "/path/to/zig-out/share/icons"
     const bin_dir = std.fs.path.dirname(exe_path) orelse return;

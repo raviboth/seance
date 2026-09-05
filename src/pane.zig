@@ -1,4 +1,5 @@
 const std = @import("std");
+const io = @import("io.zig");
 const c = @import("c.zig").c;
 const config_mod = @import("config.zig");
 const SearchOverlay = @import("search_overlay.zig").SearchOverlay;
@@ -667,7 +668,7 @@ fn initSurface(pane: *Pane, width: u32, height: u32) void {
     var bin_val: ?[*:0]const u8 = null;
     {
         var exe_buf: [std.fs.max_path_bytes]u8 = undefined;
-        if (std.fs.selfExePath(&exe_buf)) |exe_path| {
+        if (io.executablePath(&exe_buf)) |exe_path| {
             if (std.fs.path.dirname(exe_path)) |exe_dir| {
                 if (std.fs.path.dirname(exe_dir)) |prefix| {
                     if (std.fmt.bufPrintZ(&int_env_val_buf, "{s}/share/shell-integration", .{prefix})) |iv| {
@@ -686,7 +687,7 @@ fn initSurface(pane: *Pane, width: u32, height: u32) void {
     var path_val: ?[*:0]const u8 = null;
     if (bin_val) |bv| {
         const bin_dir = std.mem.sliceTo(bv, 0);
-        if (std.posix.getenv("PATH")) |existing_path| {
+        if (io.getenv("PATH")) |existing_path| {
             if (std.fmt.bufPrintZ(&path_env_buf, "{s}:{s}", .{ bin_dir, existing_path })) |pv| {
                 path_val = pv;
             } else |_| {}

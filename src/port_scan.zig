@@ -1,4 +1,5 @@
 const std = @import("std");
+const io = @import("io.zig");
 const builtin = @import("builtin");
 
 const is_linux = builtin.os.tag == .linux;
@@ -108,11 +109,11 @@ fn scanPortsLinux(panel_ids: []const u64, result_buf: []PanePorts) []PanePorts {
 /// Parse /proc/net/tcp or tcp6, extracting inode and port for LISTEN sockets.
 fn scanTcpFile(path: []const u8, buf: []InodePort, start: usize) usize {
     var count = start;
-    const file = std.fs.openFileAbsolute(path, .{}) catch return count;
-    defer file.close();
+    const file = std.Io.Dir.openFileAbsolute(io.get(), path, .{}) catch return count;
+    defer file.close(io.get());
 
     var read_buf: [131072]u8 = undefined;
-    const n = file.readAll(&read_buf) catch return count;
+    const n = io.readAll(file, &read_buf) catch return count;
     const content = read_buf[0..n];
 
     var lines = std.mem.splitScalar(u8, content, '\n');
@@ -177,32 +178,32 @@ fn parseTcpLine(line: []const u8) ?InodePort {
 
 /// Walk /proc/<pid>/fd/ to match socket inodes against known listen inodes.
 fn matchPidFds(inode_ports: []const InodePort, pid_buf: []PidPorts, pid_count: *usize) void {
-    var proc_dir = std.fs.openDirAbsolute("/proc", .{ .iterate = true }) catch return;
-    defer proc_dir.close();
+    var proc_dir = std.Io.Dir.openDirAbsolute(io.get(), "/proc", .{ .iterate = true }) catch return;
+    defer proc_dir.close(io.get());
 
     var proc_iter = proc_dir.iterate();
-    while (proc_iter.next() catch null) |entry| {
+    while (proc_iter.next(io.get()) catch null) |entry| {
         if (entry.kind != .directory) continue;
         const pid = std.fmt.parseInt(u32, entry.name, 10) catch continue;
 
         // Skip kernel threads (no exe symlink)
         var exe_path_buf: [64]u8 = undefined;
         const exe_path = std.fmt.bufPrint(&exe_path_buf, "/proc/{d}/exe", .{pid}) catch continue;
-        std.fs.accessAbsolute(exe_path, .{}) catch continue;
+        std.Io.Dir.accessAbsolute(io.get(), exe_path, .{}) catch continue;
 
         var path_buf: [64]u8 = undefined;
         const fd_path = std.fmt.bufPrint(&path_buf, "/proc/{d}/fd", .{pid}) catch continue;
 
-        var fd_dir = std.fs.openDirAbsolute(fd_path, .{ .iterate = true }) catch continue;
-        defer fd_dir.close();
+        var fd_dir = std.Io.Dir.openDirAbsolute(io.get(), fd_path, .{ .iterate = true }) catch continue;
+        defer fd_dir.close(io.get());
 
         var pp: PidPorts = .{ .pid = pid };
 
         var fd_iter = fd_dir.iterate();
-        while (fd_iter.next() catch null) |fd_entry| {
+        while (fd_iter.next(io.get()) catch null) |fd_entry| {
             // Read symlink target
             var link_buf: [128]u8 = undefined;
-            const link = fd_dir.readLink(fd_entry.name, &link_buf) catch continue;
+            const link = io.readLink(fd_dir, fd_entry.name, &link_buf) catch continue;
 
             // Match "socket:[<inode>]"
             if (std.mem.startsWith(u8, link, "socket:[")) {
@@ -240,11 +241,11 @@ fn readPanelId(pid: u32) ?u64 {
     var path_buf: [64]u8 = undefined;
     const path = std.fmt.bufPrint(&path_buf, "/proc/{d}/environ", .{pid}) catch return null;
 
-    const file = std.fs.openFileAbsolute(path, .{}) catch return null;
-    defer file.close();
+    const file = std.Io.Dir.openFileAbsolute(io.get(), path, .{}) catch return null;
+    defer file.close(io.get());
 
     var buf: [32768]u8 = undefined;
-    const n = file.readAll(&buf) catch return null;
+    const n = io.readAll(file, &buf) catch return null;
     const content = buf[0..n];
 
     const needle = "SEANCE_PANEL_ID=";
@@ -370,9 +371,9 @@ test "isDuplicate: empty slice" {
 }
 
 test "isExcluded: standard excluded ports" {
-    try std.testing.expect(isExcluded(22));   // SSH
-    try std.testing.expect(isExcluded(53));   // DNS
-    try std.testing.expect(isExcluded(631));  // CUPS
+    try std.testing.expect(isExcluded(22)); // SSH
+    try std.testing.expect(isExcluded(53)); // DNS
+    try std.testing.expect(isExcluded(631)); // CUPS
     try std.testing.expect(isExcluded(5353)); // mDNS
 }
 

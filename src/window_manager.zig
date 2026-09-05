@@ -4,7 +4,7 @@ const app_mod = @import("app.zig");
 const Window = @import("window.zig");
 const session = @import("session.zig");
 
-var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+var gpa = std.heap.DebugAllocator(.{}){};
 
 pub const WindowManager = struct {
     allocator: std.mem.Allocator,
