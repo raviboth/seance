@@ -835,6 +835,93 @@ fn initSurface(pane: *Pane, width: u32, height: u32) void {
 
 // ── Key event handling ──────────────────────────────────────────────
 
+// The embedded API accepts native keycodes, not translated keysyms. Resolve
+// non-text keys like Ghostty's GTK remapKey (apprt/gtk/key.zig), then pass the
+// canonical Linux evdev+8 code expected by its embedded key table. Keep letter
+// keys physical: layouts and printable text are handled by the text fields.
+fn canonicalKeycode(keyval: c.guint, keycode: c.guint, is_modifier: bool) c.guint {
+    return switch (keyval) {
+        c.GDK_KEY_BackSpace => 22,
+        c.GDK_KEY_Tab, c.GDK_KEY_ISO_Left_Tab => 23,
+        c.GDK_KEY_Return => 36,
+        c.GDK_KEY_KP_Enter => 104,
+        c.GDK_KEY_Escape => 9,
+        c.GDK_KEY_Delete => 119,
+        c.GDK_KEY_Insert => 118,
+        c.GDK_KEY_Home => 110,
+        c.GDK_KEY_End => 115,
+        c.GDK_KEY_Page_Up => 112,
+        c.GDK_KEY_Page_Down => 117,
+        c.GDK_KEY_Left => 113,
+        c.GDK_KEY_Right => 114,
+        c.GDK_KEY_Up => 111,
+        c.GDK_KEY_Down => 116,
+        c.GDK_KEY_Caps_Lock => 66,
+        c.GDK_KEY_Num_Lock => 77,
+        c.GDK_KEY_Scroll_Lock => 78,
+        c.GDK_KEY_Shift_L => 50,
+        c.GDK_KEY_Shift_R => 62,
+        c.GDK_KEY_Control_L => 37,
+        c.GDK_KEY_Control_R => 105,
+        c.GDK_KEY_Alt_L => 64,
+        c.GDK_KEY_Alt_R => 108,
+        c.GDK_KEY_Super_L => 133,
+        c.GDK_KEY_Super_R => 134,
+        c.GDK_KEY_space => 65,
+        c.GDK_KEY_Menu => 135,
+        c.GDK_KEY_Print => 107,
+        c.GDK_KEY_Pause => 127,
+        c.GDK_KEY_F1...c.GDK_KEY_F10 => 67 + keyval - c.GDK_KEY_F1,
+        c.GDK_KEY_F11, c.GDK_KEY_F12 => 95 + keyval - c.GDK_KEY_F11,
+        c.GDK_KEY_F13...c.GDK_KEY_F24 => 191 + keyval - c.GDK_KEY_F13,
+
+        // Unsupported modifier meanings must not fall back to the original
+        // key (e.g. keypad Enter remapped to ISO_Level3_Shift would send Enter).
+        // GDK does not mark every XKB level/group modifier as is_modifier.
+        c.GDK_KEY_Shift_Lock,
+        c.GDK_KEY_Meta_L,
+        c.GDK_KEY_Meta_R,
+        c.GDK_KEY_Hyper_L,
+        c.GDK_KEY_Hyper_R,
+        c.GDK_KEY_Mode_switch,
+        c.GDK_KEY_ISO_Lock,
+        c.GDK_KEY_ISO_Level2_Latch,
+        c.GDK_KEY_ISO_Level3_Shift,
+        c.GDK_KEY_ISO_Level3_Latch,
+        c.GDK_KEY_ISO_Level3_Lock,
+        c.GDK_KEY_ISO_Level5_Shift,
+        c.GDK_KEY_ISO_Level5_Latch,
+        c.GDK_KEY_ISO_Level5_Lock,
+        c.GDK_KEY_ISO_Group_Latch,
+        c.GDK_KEY_ISO_Group_Lock,
+        => 0,
+        else => if (is_modifier) 0 else keycode,
+    };
+}
+
+test "XKB remaps editing keys and both halves of Caps Escape swaps" {
+    try std.testing.expectEqual(@as(c.guint, 22), canonicalKeycode(c.GDK_KEY_BackSpace, 66, false));
+    try std.testing.expectEqual(@as(c.guint, 9), canonicalKeycode(c.GDK_KEY_Escape, 66, false));
+    try std.testing.expectEqual(@as(c.guint, 66), canonicalKeycode(c.GDK_KEY_Caps_Lock, 9, true));
+    try std.testing.expectEqual(@as(c.guint, 105), canonicalKeycode(c.GDK_KEY_Control_R, 66, true));
+    try std.testing.expectEqual(@as(c.guint, 96), canonicalKeycode(c.GDK_KEY_F12, 66, false));
+}
+
+test "XKB modifier targets never fall back to editing keys" {
+    try std.testing.expectEqual(@as(c.guint, 0), canonicalKeycode(c.GDK_KEY_ISO_Level3_Shift, 104, true));
+    try std.testing.expectEqual(@as(c.guint, 0), canonicalKeycode(c.GDK_KEY_Mode_switch, 119, false));
+    try std.testing.expectEqual(@as(c.guint, 0), canonicalKeycode(c.GDK_KEY_VoidSymbol, 119, true));
+}
+
+test "XKB keeps physical writing keys and keypad identity" {
+    try std.testing.expectEqual(@as(c.guint, 26), canonicalKeycode(c.GDK_KEY_f, 26, false));
+    try std.testing.expectEqual(@as(c.guint, 26), canonicalKeycode(c.GDK_KEY_F, 26, false));
+    try std.testing.expectEqual(@as(c.guint, 54), canonicalKeycode(c.GDK_KEY_Cyrillic_tse, 54, false));
+    try std.testing.expectEqual(@as(c.guint, 104), canonicalKeycode(c.GDK_KEY_KP_Enter, 104, false));
+    try std.testing.expectEqual(@as(c.guint, 87), canonicalKeycode(c.GDK_KEY_KP_End, 87, false));
+    try std.testing.expectEqual(@as(c.guint, 23), canonicalKeycode(c.GDK_KEY_ISO_Left_Tab, 23, false));
+}
+
 fn translateMods(state: c.GdkModifierType) c.ghostty_input_mods_e {
     var mods: c_uint = c.GHOSTTY_MODS_NONE;
     const s: c_uint = @bitCast(state);
@@ -962,11 +1049,16 @@ fn handleKeyEvent(
     // Get unshifted codepoint
     const unshifted = c.gdk_keyval_to_unicode(c.gdk_keyval_to_lower(keyval));
 
+    // GDK already resolved the XKB mapping and modifier state. Remapping a key
+    // does not imply Caps Lock is off; another key may have enabled the lock.
+    const is_modifier = if (event) |ev| c.gdk_key_event_is_modifier(ev) != 0 else false;
+    const effective_keycode = canonicalKeycode(keyval, keycode, is_modifier);
+
     const key_ev = c.ghostty_input_key_s{
         .action = if (is_release) c.GHOSTTY_ACTION_RELEASE else c.GHOSTTY_ACTION_PRESS,
         .mods = @intCast(mods),
         .consumed_mods = @intCast(consumed),
-        .keycode = keycode,
+        .keycode = effective_keycode,
         .text = text_ptr,
         .unshifted_codepoint = @intCast(if (unshifted > 0) unshifted else 0),
         .composing = pane.im_composing,

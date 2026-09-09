@@ -335,7 +335,7 @@ pub fn build(b: *std.Build) void {
     }
 
     // Tests for files that need GTK/ghostty
-    for ([_][]const u8{ "src/config.zig", "src/keybinds.zig", "src/notification.zig", "src/workspace.zig", "src/session.zig" }) |src| {
+    for ([_][]const u8{ "src/config.zig", "src/keybinds.zig", "src/notification.zig", "src/pane.zig", "src/workspace.zig", "src/session.zig" }) |src| {
         const test_mod = b.createModule(.{
             .root_source_file = b.path(src),
             .target = target,

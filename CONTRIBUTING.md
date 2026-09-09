@@ -33,6 +33,13 @@ Set `SEANCE_TEST_CODEX` to the real Codex binary (outside Séance's wrapper dire
 to also check hook loading and approval persistence using its local app-server.
 This check uses a temporary Codex home and makes no model calls.
 
+Physical keyboard remap tests require `Xvfb`, `xdotool`, and `setxkbmap`.
+They create a separate X server and never modify your desktop's keyboard layout:
+
+```bash
+SEANCE_TEST_BINARY="$PWD/zig-out/bin/seance" python3 -m unittest discover -s tests -p 'test_keyboard_remaps.py' -v
+```
+
 ## Code style
 
 - Match existing style. Zig source uses the standard formatter (`zig fmt`).

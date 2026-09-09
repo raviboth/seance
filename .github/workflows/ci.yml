@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
+  pull_request:
 
 jobs:
   build-and-test:
@@ -32,6 +33,8 @@ jobs:
             libgl-dev \
             libfontconfig-dev \
             libonig-dev \
+            xdotool \
+            x11-xkb-utils \
             xvfb
 
       - name: Build
@@ -48,5 +51,10 @@ jobs:
 
       - name: Ghostty embedding tests
         run: xvfb-run python3 -m unittest discover -s tests -p 'test_ghostty_integration.py' -v
+        env:
+          SEANCE_TEST_BINARY: ${{ github.workspace }}/zig-out/bin/seance
+
+      - name: Keyboard remap tests
+        run: python3 -m unittest discover -s tests -p 'test_keyboard_remaps.py' -v
         env:
           SEANCE_TEST_BINARY: ${{ github.workspace }}/zig-out/bin/seance
