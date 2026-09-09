@@ -19,6 +19,7 @@
 # position = "left"              # "left" or "right"
 # width = 200
 # visible = true
+# show-button-bar = true         # bottom button row with server-side window decorations
 # show-notification-text = true  # latest notification text below workspace title
 # show-status = true             # custom status metadata pills
 # show-logs = true               # most recent log message

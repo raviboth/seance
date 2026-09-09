@@ -38,6 +38,7 @@ pub const Config = struct {
     sidebar_position: SidebarPosition = .left,
     sidebar_width: u32 = 240,
     sidebar_visible: bool = true,
+    sidebar_show_button_bar: bool = true,
     sidebar_show_notification_text: bool = true,
     sidebar_show_status: bool = true,
     sidebar_show_logs: bool = true,
@@ -249,6 +250,7 @@ pub fn saveConfig(cfg: *const Config) void {
     w.print("position = \"{s}\"\n", .{if (cfg.sidebar_position == .right) @as([]const u8, "right") else @as([]const u8, "left")}) catch return;
     w.print("width = {d}\n", .{cfg.sidebar_width}) catch return;
     writeBool(w, "visible", cfg.sidebar_visible) catch return;
+    writeBool(w, "show-button-bar", cfg.sidebar_show_button_bar) catch return;
     writeBool(w, "show-notification-text", cfg.sidebar_show_notification_text) catch return;
     writeBool(w, "show-status", cfg.sidebar_show_status) catch return;
     writeBool(w, "show-logs", cfg.sidebar_show_logs) catch return;
@@ -419,6 +421,9 @@ fn applyValue(config: *Config, section: []const u8, key: []const u8, raw_val: []
             return true;
         } else if (eql(key, "visible")) {
             config.sidebar_visible = parseBool(val) orelse config.sidebar_visible;
+            return true;
+        } else if (eql(key, "show-button-bar")) {
+            config.sidebar_show_button_bar = parseBool(val) orelse config.sidebar_show_button_bar;
             return true;
         } else if (eql(key, "show-notification-text")) {
             config.sidebar_show_notification_text = parseBool(val) orelse config.sidebar_show_notification_text;

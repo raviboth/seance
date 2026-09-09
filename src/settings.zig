@@ -30,6 +30,7 @@ const Widgets = struct {
     bell_notification: ?*c.GtkWidget = null,
     confirm_close_window: ?*c.GtkWidget = null,
     focus_follows_mouse: ?*c.GtkWidget = null,
+    show_button_bar: ?*c.GtkWidget = null,
     show_notification_text: ?*c.GtkWidget = null,
     show_status: ?*c.GtkWidget = null,
     show_logs: ?*c.GtkWidget = null,
@@ -236,6 +237,7 @@ fn buildWindowSection(page: *c.GtkWidget, cfg: *const config_mod.Config) void {
 
     w.confirm_close_window = addSwitchRow(g1, "Confirm Closing Window", "Ask before closing a window with multiple workspaces.", cfg.confirm_close_window);
     w.sidebar_position = addComboRow(g1, "Sidebar Position", &.{ "Left", "Right" }, if (cfg.sidebar_position == .right) @as(u32, 1) else @as(u32, 0));
+    w.show_button_bar = addSwitchRow(g1, "Show Button Bar", "Show the bottom sidebar buttons when using server-side window decorations.", cfg.sidebar_show_button_bar);
     addToPage(page, g1);
 
     // Sidebar detail visibility
@@ -666,6 +668,8 @@ fn onSwitchChanged(obj: *c.GObject, _: *c.GParamSpec, _: c.gpointer) callconv(.c
         cfg.confirm_close_window = active;
     } else if (widget == w.focus_follows_mouse) {
         cfg.focus_follows_mouse = active;
+    } else if (widget == w.show_button_bar) {
+        cfg.sidebar_show_button_bar = active;
     } else if (widget == w.show_notification_text) {
         cfg.sidebar_show_notification_text = active;
     } else if (widget == w.show_status) {

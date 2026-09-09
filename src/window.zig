@@ -870,13 +870,24 @@ pub const WindowState = struct {
         if (c.gtk_widget_get_visible(popover) != 0) {
             c.gtk_popover_popdown(@ptrCast(popover));
         } else {
-            // In SSD mode the bell anchor lives in the sidebar footer, so we
+            // In SSD mode the anchor lives in the sidebar, so we
             // need the sidebar revealed for the popover to have a parent on
             // screen. In CSD mode the anchor is in the header bar, so leave
             // the sidebar alone.
             if (self.effective_decoration == .ssd and !self.sidebar_visible) {
                 self.sidebar_visible = true;
                 c.gtk_revealer_set_reveal_child(self.sidebar_revealer, 1);
+            }
+            if (self.sidebar.notif_overlay == null) {
+                // Keep keyboard access to notifications when the button bar
+                // is disabled, anchoring at the bottom of the sidebar.
+                const rect = c.GdkRectangle{
+                    .x = @divTrunc(c.gtk_widget_get_width(self.sidebar.widget), 2),
+                    .y = c.gtk_widget_get_height(self.sidebar.widget),
+                    .width = 1,
+                    .height = 1,
+                };
+                c.gtk_popover_set_pointing_to(@ptrCast(popover), &rect);
             }
             self.notif_panel.refresh();
             c.gtk_popover_popup(@ptrCast(popover));
@@ -999,6 +1010,7 @@ pub const WindowState = struct {
         // in place if the effective mode differs from what's currently
         // displayed).  No-op on windows where the mode hasn't changed.
         self.applyDecorationMode();
+        self.applySidebarButtonBar();
 
         // Refresh sidebar to pick up any sidebar-related config changes
         self.sidebar.refresh();
@@ -1191,12 +1203,12 @@ pub const WindowState = struct {
     }
 
     /// Build the SSD chrome: the banner_box becomes the window's direct
-    /// content, the sidebar grows a footer with the action buttons, and we
+    /// content, the sidebar optionally grows a footer with action buttons, and we
     /// ask the windowing system to draw decorations.
     fn buildSsdChrome(self: *WindowState) void {
         const window = self.gtk_window;
 
-        self.sidebar.buildFooter();
+        if (self.config.sidebar_show_button_bar) self.sidebar.buildFooter();
 
         c.adw_application_window_set_content(@ptrCast(window), self.banner_box);
         self.toolbar_view = null;
@@ -1204,6 +1216,33 @@ pub const WindowState = struct {
         // Ask the WM to draw SSD.  No-op if SSD isn't available; caller
         // guarantees we only pick ssd when isSsdAvailable() returns true.
         kde_decoration.attachToWindow(@ptrCast(window));
+    }
+
+    fn applySidebarButtonBar(self: *WindowState) void {
+        if (self.effective_decoration != .ssd) return;
+        if (self.config.sidebar_show_button_bar == (self.sidebar.footer != null)) return;
+
+        // Preserve the notification panel before destroying its bell anchor.
+        if (self.notif_popover) |pop| {
+            _ = c.g_object_ref(@ptrCast(pop));
+            c.gtk_popover_popdown(@ptrCast(pop));
+            c.gtk_widget_unparent(pop);
+        }
+        if (self.config.sidebar_show_button_bar) {
+            self.sidebar.buildFooter();
+        } else {
+            self.sidebar.destroyFooter();
+        }
+        if (self.notif_popover) |pop| {
+            self.parentNotificationPopover(pop);
+            c.g_object_unref(@ptrCast(pop));
+        }
+    }
+
+    fn parentNotificationPopover(self: *WindowState, pop: *c.GtkWidget) void {
+        c.gtk_widget_set_parent(pop, self.sidebar.notif_overlay orelse self.sidebar.widget);
+        c.gtk_popover_set_has_arrow(@ptrCast(pop), if (self.sidebar.notif_overlay != null) 1 else 0);
+        c.gtk_popover_set_pointing_to(@ptrCast(pop), null);
     }
 
     /// Toast exactly once per explicit-ssd request when the compositor can't
@@ -1240,6 +1279,7 @@ pub const WindowState = struct {
         var popover_ref: ?*c.GtkWidget = null;
         if (self.notif_popover) |pop| {
             _ = c.g_object_ref(@ptrCast(pop));
+            c.gtk_popover_popdown(@ptrCast(pop));
             c.gtk_widget_unparent(pop);
             popover_ref = pop;
         }
@@ -1280,11 +1320,9 @@ pub const WindowState = struct {
             },
         }
 
-        // Reanchor the notification popover to the new bell overlay.
+        // Reanchor to the bell, or the sidebar when the button bar is disabled.
         if (popover_ref) |pop| {
-            if (self.sidebar.notif_overlay) |anchor| {
-                c.gtk_widget_set_parent(pop, anchor);
-            }
+            self.parentNotificationPopover(pop);
             c.g_object_unref(@ptrCast(pop));
         }
 
@@ -1478,13 +1516,11 @@ pub fn create(wm: *WindowManager) !*WindowState {
     // presented.
     state.warnIfSsdUnhonorable();
 
-    // Create notification popover attached to the bell overlay.  The
-    // overlay lives in the CSD header bar or the SSD sidebar footer; the
-    // chrome build above has already set sidebar.notif_overlay accordingly.
+    // Use the bell overlay when present, otherwise anchor to the sidebar
+    // so keyboard access still works with the button bar disabled.
     const notif_popover: *c.GtkWidget = @ptrCast(c.gtk_popover_new());
-    c.gtk_widget_set_parent(notif_popover, state.sidebar.notif_overlay.?);
+    state.parentNotificationPopover(notif_popover);
     c.gtk_widget_add_css_class(notif_popover, "notification-popover");
-    c.gtk_popover_set_has_arrow(@ptrCast(notif_popover), 1);
     c.gtk_popover_set_child(@ptrCast(notif_popover), state.notif_panel.container);
     state.notif_popover = notif_popover;
     state.notif_panel.popover = notif_popover;

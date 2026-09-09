@@ -41,7 +41,7 @@ pub const Sidebar = struct {
 
     // Footer row (add / notif / hide / settings).  Only present when the
     // window is in SSD mode and we can't stash those buttons in an
-    // adw_header_bar.  Null in CSD mode.
+    // adw_header_bar.  Null in CSD mode or when the button bar is disabled.
     footer: ?*c.GtkWidget = null,
 
     // Suppress refresh while interacting (context menu or hover)
